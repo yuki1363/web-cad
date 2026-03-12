@@ -174,3 +174,53 @@ document.addEventListener("keydown",(e)=>{
  drawAll()
 
 })
+document
+.getElementById("circleTool")
+.onclick=()=>{
+
+ canvas.onclick=(e)=>{
+
+  addShape({
+   type:"circle",
+   x:e.offsetX,
+   y:e.offsetY,
+   r:30
+  })
+
+  drawAll()
+
+ }
+
+}
+document
+.getElementById("rectTool")
+.onclick=()=>{
+
+ canvas.onclick=(e)=>{
+
+  addShape({
+   type:"rect",
+   x:e.offsetX,
+   y:e.offsetY,
+   w:80,
+   h:50
+  })
+
+  drawAll()
+
+ }
+
+}
+if(s.type==="circle"){
+
+ ctx.beginPath()
+ ctx.arc(s.x,s.y,s.r,0,Math.PI*2)
+ ctx.stroke()
+
+}
+
+if(s.type==="rect"){
+
+ ctx.strokeRect(s.x,s.y,s.w,s.h)
+
+}
