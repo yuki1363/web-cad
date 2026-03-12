@@ -48,23 +48,29 @@ function drawAll(){
 
  const shapes = getShapes()
 
- shapes.forEach(s=>{
+ shapes.forEach((s,i)=>{
+
+  ctx.beginPath()
 
   if(s.type==="line"){
 
-   ctx.beginPath()
    ctx.moveTo(s.x1,s.y1)
    ctx.lineTo(s.x2,s.y2)
-   ctx.strokeStyle="white"
-   ctx.lineWidth=2
-   ctx.stroke()
 
   }
+
+  if(i===getSelected()){
+   ctx.strokeStyle="red"
+  }else{
+   ctx.strokeStyle="white"
+  }
+
+  ctx.lineWidth=2
+  ctx.stroke()
 
  })
 
 }
-
 document
 .getElementById("lineTool")
 .onclick=()=>activateTool("line")
