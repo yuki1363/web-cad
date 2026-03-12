@@ -1,16 +1,25 @@
-import {initEngine} from "./cad/engine.js"
-import {drawScene} from "./cad/draw.js"
-import {initZoom} from "./cad/zoom.js"
-import {initPan} from "./cad/pan.js"
+<!DOCTYPE html>
+<html lang="ja">
 
-const canvas=document.getElementById("canvas")
+<head>
+<meta charset="UTF-8">
+<title>Web CAD Test</title>
+<link rel="stylesheet" href="style.css">
+</head>
 
-canvas.width=window.innerWidth
-canvas.height=window.innerHeight-50
+<body>
 
-initEngine(canvas)
+<div id="toolbar">
 
-initZoom(canvas)
-initPan(canvas)
+<button id="line">Line</button>
+<button id="rect">Rect</button>
+<button id="circle">Circle</button>
 
-drawScene()
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script type="module" src="src/main.js"></script>
+
+</body>
+</html>
