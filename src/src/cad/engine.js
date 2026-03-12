@@ -1,38 +1,34 @@
-export const shapes=[]
+export let shapes=[]
+export let selected=-1
 
-let selected=-1
+export function initEngine(canvas){
 
-export function addShape(shape){
-
-shapes.push(shape)
-
-}
-
-export function getShapes(){
-
-return shapes
+canvas.addEventListener("click",selectShape)
 
 }
 
-export function selectShape(index){
+function selectShape(e){
 
-selected=index
+const x=e.offsetX
+const y=e.offsetY
+
+shapes.forEach((s,i)=>{
+
+if(s.type==="rect"){
+
+if(
+x>s.x &&
+x<s.x+s.w &&
+y>s.y &&
+y<s.y+s.h
+){
+
+selected=i
 
 }
 
-export function getSelected(){
-
-return selected
-
 }
 
-export function deleteShape(){
-
-if(selected>=0){
-
-shapes.splice(selected,1)
-selected=-1
-
-}
+})
 
 }
