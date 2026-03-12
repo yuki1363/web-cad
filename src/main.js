@@ -81,3 +81,37 @@ document.addEventListener("keydown",(e)=>{
  }
 
 })
+import { getSelected, selectShape } from "./cad/engine.js"
+
+canvas.addEventListener("click",(e)=>{
+
+ const x = e.offsetX
+ const y = e.offsetY
+
+ const shapes = getShapes()
+
+ shapes.forEach((s,i)=>{
+
+  if(s.type==="line"){
+
+   const dx = s.x2 - s.x1
+   const dy = s.y2 - s.y1
+
+   const length = Math.hypot(dx,dy)
+
+   const dist =
+   Math.abs(
+   (dy*x)-(dx*y)+(s.x2*s.y1)-(s.y2*s.x1)
+   )/length
+
+   if(dist < 5){
+    selectShape(i)
+   }
+
+  }
+
+ })
+
+ drawAll()
+
+})
