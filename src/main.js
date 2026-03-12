@@ -143,3 +143,34 @@ document.addEventListener("keydown",(e)=>{
  }
 
 })
+document.addEventListener("keydown",(e)=>{
+
+ const index=getSelected()
+
+ if(index<0) return
+
+ const shape=getShapes()[index]
+
+ if(e.key==="ArrowUp"){
+  shape.y1-=5
+  shape.y2-=5
+ }
+
+ if(e.key==="ArrowDown"){
+  shape.y1+=5
+  shape.y2+=5
+ }
+
+ if(e.key==="ArrowLeft"){
+  shape.x1-=5
+  shape.x2-=5
+ }
+
+ if(e.key==="ArrowRight"){
+  shape.x1+=5
+  shape.x2+=5
+ }
+
+ drawAll()
+
+})
