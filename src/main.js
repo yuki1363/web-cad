@@ -121,3 +121,25 @@ canvas.addEventListener("click",(e)=>{
  drawAll()
 
 })
+document.addEventListener("keydown",(e)=>{
+
+ if(e.key==="c"){
+
+  const index=getSelected()
+
+  if(index<0) return
+
+  const shape={...getShapes()[index]}
+
+  shape.x1+=20
+  shape.y1+=20
+  shape.x2+=20
+  shape.y2+=20
+
+  addShape(shape)
+
+  drawAll()
+
+ }
+
+})
