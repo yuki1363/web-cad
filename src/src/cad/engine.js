@@ -1,23 +1,38 @@
-export const shapes = []
+export const shapes=[]
 
-let selectedIndex = -1
-
-export function startEngine(){
- console.log("CAD Engine Started")
-}
+let selected=-1
 
 export function addShape(shape){
- shapes.push(shape)
+
+shapes.push(shape)
+
 }
 
 export function getShapes(){
- return shapes
+
+return shapes
+
 }
 
 export function selectShape(index){
- selectedIndex = index
+
+selected=index
+
 }
 
 export function getSelected(){
- return selectedIndex
+
+return selected
+
+}
+
+export function deleteShape(){
+
+if(selected>=0){
+
+shapes.splice(selected,1)
+selected=-1
+
+}
+
 }
