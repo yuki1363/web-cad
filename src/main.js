@@ -68,3 +68,16 @@ function drawAll(){
 document
 .getElementById("lineTool")
 .onclick=()=>activateTool("line")
+document.addEventListener("keydown",(e)=>{
+
+ if(e.key==="Delete"){
+
+  const shapes=getShapes()
+
+  shapes.pop()
+
+  drawAll()
+
+ }
+
+})
