@@ -1,30 +1,47 @@
 <!DOCTYPE html>
 <html lang="ja">
-
 <head>
 <meta charset="UTF-8">
 <title>Web CAD Pro</title>
 <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
 
 <div id="toolbar">
+  <span class="brand">WebCAD</span>
+  <div class="sep"></div>
 
-<button id="line">Line</button>
-<button id="rect">Rect</button>
-<button id="circle">Circle</button>
+  <button data-tool="select"   title="Select (S)">&#9654; Select</button>
+  <button data-tool="line"     title="Line (L)">/ Line</button>
+  <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
+  <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
+  <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
 
-<button id="undo">Undo</button>
-<button id="redo">Redo</button>
+  <div class="sep"></div>
 
-<button id="saveDXF">DXF保存</button>
+  <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
+  <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
 
+  <div class="sep"></div>
+
+  <button id="clearBtn">&#128465; Clear</button>
+  <button id="saveDXF">&#8659; DXF</button>
+
+  <div class="spacer"></div>
+
+  <button id="snapBtn" class="active">Snap: ON</button>
+  <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
 <canvas id="canvas"></canvas>
 
-<script type="module" src="src/main.js"></script>
+<div id="hint">
+  <b>Shortcuts:</b>
+  L=Line&nbsp; R=Rect&nbsp; C=Circle&nbsp; P=Polyline&nbsp; S=Select&nbsp;
+  | Space+drag=Pan&nbsp; Scroll=Zoom&nbsp; F9=Snap&nbsp;
+  | Del=Delete selected&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
+</div>
 
+<script type="module" src="src/main.js"></script>
 </body>
 </html>
