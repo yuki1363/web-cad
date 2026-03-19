@@ -229,6 +229,7 @@ canvas {
   <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
   <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
   <button data-tool="trim"     title="Trim (T)">&#9988; Trim</button>
+  <button data-tool="extend"   title="Extend (E)">&#8614; Extend</button>
   <div class="sep"></div>
   <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
   <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
@@ -533,6 +534,80 @@ function doTrim(shapeIdx, clickT) {
   redraw()
 }
 
+// ── Extend tool ──────────────────────────────────────────────────────────────
+let extendPreview = null  // {fromX,fromY,toX,toY,newX1,newY1,newX2,newY2,shapeIdx}
+
+// t on INFINITE line AB at intersection with finite segment CD (s∈[0,1])
+function extendT(ax,ay,bx,by, cx,cy,dx,dy) {
+  const ex=bx-ax, ey=by-ay, fx=dx-cx, fy=dy-cy
+  const denom = ex*fy - ey*fx
+  if (Math.abs(denom) < 1e-10) return null
+  const t = ((cx-ax)*fy - (cy-ay)*fx) / denom
+  const s = ((cx-ax)*ey - (cy-ay)*ex) / denom
+  if (s < -1e-9 || s > 1+1e-9) return null
+  return t
+}
+
+// All t values (on infinite line AB) where it hits shape s
+function extendTsAgainst(ax,ay,bx,by, s) {
+  const ts = []
+  if (s.type === 'line') {
+    const t = extendT(ax,ay,bx,by, s.x1,s.y1,s.x2,s.y2)
+    if (t !== null) ts.push(t)
+  } else if (s.type === 'rect') {
+    const x1=s.x,y1=s.y,x2=s.x+s.w,y2=s.y+s.h
+    ;[[x1,y1,x2,y1],[x2,y1,x2,y2],[x2,y2,x1,y2],[x1,y2,x1,y1]]
+      .forEach(e => { const t=extendT(ax,ay,bx,by,e[0],e[1],e[2],e[3]); if(t!==null) ts.push(t) })
+  } else if (s.type === 'circle') {
+    const dx=bx-ax,dy=by-ay,fx=ax-s.x,fy=ay-s.y
+    const a=dx*dx+dy*dy,b=2*(dx*fx+dy*fy),c=fx*fx+fy*fy-s.r*s.r,disc=b*b-4*a*c
+    if (disc>=0 && a>1e-10) { const sq=Math.sqrt(disc); ts.push((-b-sq)/(2*a),(-b+sq)/(2*a)) }
+  } else if (s.type === 'polyline') {
+    for (let k=0;k<s.points.length-1;k++) {
+      const t=extendT(ax,ay,bx,by,s.points[k].x,s.points[k].y,s.points[k+1].x,s.points[k+1].y)
+      if (t!==null) ts.push(t)
+    }
+  }
+  return ts
+}
+
+// Compute where to extend the line and which endpoint moves
+function computeExtend(shapeIdx, clickT) {
+  const s = engineState.shapes[shapeIdx]
+  if (s.type !== 'line') return null
+  const extendEnd = clickT >= 0.5   // true → extend the end-point, false → start-point
+  const ax=s.x1,ay=s.y1,bx=s.x2,by=s.y2
+  const allTs = []
+  engineState.shapes.forEach((other,i) => {
+    if (i===shapeIdx) return
+    extendTsAgainst(ax,ay,bx,by, other).forEach(t => allTs.push(t))
+  })
+  let targetT = null
+  if (extendEnd) {
+    const cands = allTs.filter(t => t > 1+1e-6)
+    if (cands.length) targetT = Math.min(...cands)
+  } else {
+    const cands = allTs.filter(t => t < -1e-6)
+    if (cands.length) targetT = Math.max(...cands)
+  }
+  if (targetT === null) return null
+  const lx = ax+targetT*(bx-ax), ly = ay+targetT*(by-ay)
+  return extendEnd
+    ? { fromX:bx,fromY:by, toX:lx,toY:ly, newX1:ax,newY1:ay,newX2:lx,newY2:ly, shapeIdx }
+    : { fromX:ax,fromY:ay, toX:lx,toY:ly, newX1:lx,newY1:ly,newX2:bx,newY2:by, shapeIdx }
+}
+
+function doExtend(shapeIdx, clickT) {
+  const result = computeExtend(shapeIdx, clickT)
+  if (!result) return
+  saveState()
+  const s = engineState.shapes[result.shapeIdx]
+  s.x1=result.newX1; s.y1=result.newY1; s.x2=result.newX2; s.y2=result.newY2
+  extendPreview = null
+  redraw()
+  updatePropsPanel()
+}
+
 // ── Properties panel ─────────────────────────────────────────────────────────
 function getSelectedIdx() {
   if (engineState.selected.size !== 1) return -1
@@ -757,6 +832,7 @@ function setTool(name) {
   toolState.previewShape = null
   toolState.polyPoints = []
   trimPreview = null
+  extendPreview = null
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
   redraw()
   updatePropsPanel()
@@ -886,6 +962,16 @@ function redraw() {
     drawDimAnnotation(toolState.previewShape, '#facc15')
   }
 
+  // Extend preview: cyan dashed line + snap dot
+  if (extendPreview) {
+    drawShape({type:'line',x1:extendPreview.fromX,y1:extendPreview.fromY,
+                           x2:extendPreview.toX,  y2:extendPreview.toY}, '#22d3ee', 2.5, true)
+    ctx.beginPath()
+    ctx.arc(extendPreview.toX, extendPreview.toY, 5/scale, 0, Math.PI*2)
+    ctx.fillStyle = '#22d3ee'
+    ctx.fill()
+  }
+
   // Trim preview: red highlight on the segment that will be removed
   if (trimPreview) {
     drawShape({type:'line', x1:trimPreview.x1, y1:trimPreview.y1,
@@ -954,14 +1040,15 @@ canvas.addEventListener('mousedown', e => {
   const raw = screenToWorld(e.offsetX, e.offsetY)
   const wpt = snapToGrid(raw.x, raw.y)
 
-  if (toolState.active === 'trim') {
+  if (toolState.active === 'trim' || toolState.active === 'extend') {
     for (let i=engineState.shapes.length-1; i>=0; i--) {
       const s = engineState.shapes[i]
       if (s.type === 'line' && hitTest(s, raw.x, raw.y)) {
         const dx=s.x2-s.x1, dy=s.y2-s.y1, len2=dx*dx+dy*dy
         if (len2 < 1e-10) break
         const t = Math.max(0, Math.min(1, ((raw.x-s.x1)*dx+(raw.y-s.y1)*dy)/len2))
-        doTrim(i, t)
+        if (toolState.active === 'trim') doTrim(i, t)
+        else doExtend(i, t)
         break
       }
     }
@@ -1008,6 +1095,23 @@ window.addEventListener('mousemove', e => {
   const wpt = snapToGrid(raw.x, raw.y)
 
   document.getElementById('coords').textContent = `X: ${wpt.x.toFixed(1)}  Y: ${(-wpt.y).toFixed(1)}`
+
+  // Extend: hover preview
+  if (toolState.active === 'extend') {
+    extendPreview = null
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      const s = engineState.shapes[i]
+      if (s.type === 'line' && hitTest(s, raw.x, raw.y)) {
+        const dx=s.x2-s.x1, dy=s.y2-s.y1, len2=dx*dx+dy*dy
+        if (len2 < 1e-10) break
+        const t = Math.max(0, Math.min(1, ((raw.x-s.x1)*dx+(raw.y-s.y1)*dy)/len2))
+        extendPreview = computeExtend(i, t)
+        break
+      }
+    }
+    redraw()
+    return
+  }
 
   // Trim: hover preview
   if (toolState.active === 'trim') {
@@ -1099,7 +1203,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select', t: 'trim' }
+  const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select', t: 'trim', e: 'extend' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
