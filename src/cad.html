@@ -228,6 +228,7 @@ canvas {
   <button data-tool="copy"     title="Copy (Y)">&#9107; Copy</button>
   <button data-tool="scale"    title="Scale (Z)">&#8693; Scale</button>
   <button data-tool="mirror"   title="Mirror (X)">&#8596; Mirror</button>
+  <button data-tool="text"     title="Text (A)">&#65332; Text</button>
   <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
   <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
   <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
@@ -258,6 +259,12 @@ canvas {
 </div>
 
 <canvas id="canvas"></canvas>
+<div id="textInputWrap" style="position:fixed;display:none;z-index:200">
+  <input id="textInput" type="text" placeholder="テキスト入力…"
+         style="background:#1e293b;color:#f1f5f9;border:1.5px solid #a78bfa;
+                border-radius:4px;padding:3px 6px;font-size:14px;outline:none;
+                min-width:120px;box-shadow:0 2px 8px #0008">
+</div>
 <img id="print-img" alt="WebCAD Print">
 
 <div id="props-panel">
@@ -348,6 +355,12 @@ function hitTest(s, x, y) {
   }
   if (s.type === 'circle') return Math.abs(Math.hypot(x - s.x, y - s.y) - s.r) < T
   if (s.type === 'arc')    return Math.abs(Math.hypot(x - s.x, y - s.y) - s.r) < T
+  if (s.type === 'text') {
+    const fs = s.fontSize || 16
+    ctx.font = `${fs}px sans-serif`
+    const w = ctx.measureText(s.text).width
+    return x >= s.x - T && x <= s.x + w + T && y >= s.y - fs - T && y <= s.y + T
+  }
   if (s.type === 'polyline') {
     for (let i = 0; i < s.points.length - 1; i++) {
       if (distToSegment(x, y, s.points[i].x, s.points[i].y, s.points[i+1].x, s.points[i+1].y) < T) return true
@@ -772,6 +785,8 @@ function moveShapeFromOrig(s, orig, dx, dy) {
     s.x=orig.x+dx; s.y=orig.y+dy
   } else if (s.type === 'circle' || s.type === 'arc') {
     s.x=orig.x+dx; s.y=orig.y+dy
+  } else if (s.type === 'text') {
+    s.x=orig.x+dx; s.y=orig.y+dy
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { p.x=orig.points[i].x+dx; p.y=orig.points[i].y+dy })
   }
@@ -788,6 +803,9 @@ function scaleShapeFromOrig(s, orig, cx, cy, f) {
   } else if (s.type === 'circle' || s.type === 'arc') {
     s.x=sc(orig.x,cx); s.y=sc(orig.y,cy)
     s.r=Math.abs(orig.r*f)
+  } else if (s.type === 'text') {
+    s.x=sc(orig.x,cx); s.y=sc(orig.y,cy)
+    s.fontSize = Math.max(1, (orig.fontSize||16) * f)
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { p.x=sc(orig.points[i].x,cx); p.y=sc(orig.points[i].y,cy) })
   }
@@ -807,6 +825,9 @@ function selectionCenter(idxSet) {
     } else if (s.type==='circle'||s.type==='arc') {
       minX=Math.min(minX,s.x-s.r); maxX=Math.max(maxX,s.x+s.r)
       minY=Math.min(minY,s.y-s.r); maxY=Math.max(maxY,s.y+s.r)
+    } else if (s.type==='text') {
+      minX=Math.min(minX,s.x); maxX=Math.max(maxX,s.x+(s.fontSize||16)*s.text.length*0.6)
+      minY=Math.min(minY,s.y-(s.fontSize||16)); maxY=Math.max(maxY,s.y)
     } else if (s.type==='polyline') {
       s.points.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y)})
     }
@@ -844,10 +865,56 @@ function mirrorShapeFromOrig(s, orig, ax, ay, bx, by) {
     s.startAngle   = 2*axAngle - orig.endAngle
     s.endAngle     = 2*axAngle - orig.startAngle
     s.anticlockwise = !orig.anticlockwise
+  } else if (s.type === 'text') {
+    const c=mp(orig.x,orig.y); s.x=c.x; s.y=c.y
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { const m=mp(orig.points[i].x,orig.points[i].y); p.x=m.x; p.y=m.y })
   }
 }
+
+// ── Text tool ─────────────────────────────────────────────────────────────────
+let textState = null  // {worldX, worldY} while input is open
+
+function showTextInput(worldX, worldY) {
+  const { x: ox, y: oy, scale } = engineState.transform
+  const rect = canvas.getBoundingClientRect()
+  const sx = worldX * scale + ox + rect.left
+  const sy = worldY * scale + oy + rect.top
+  const wrap = document.getElementById('textInputWrap')
+  const inp  = document.getElementById('textInput')
+  wrap.style.left = sx + 'px'
+  wrap.style.top  = sy + 'px'
+  wrap.style.display = 'block'
+  inp.value = ''
+  inp.style.fontSize = Math.max(10, (currentFontSize || 16) * scale) + 'px'
+  inp.focus()
+  textState = { worldX, worldY }
+}
+
+function commitText() {
+  const inp  = document.getElementById('textInput')
+  const wrap = document.getElementById('textInputWrap')
+  const text = inp.value.trim()
+  if (text && textState) {
+    saveState()
+    engineState.shapes.push({ type:'text', x:textState.worldX, y:textState.worldY,
+                               text, fontSize: currentFontSize || 16 })
+    redraw()
+  }
+  wrap.style.display = 'none'
+  textState = null
+}
+
+let currentFontSize = 16
+
+document.getElementById('textInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); commitText() }
+  if (e.key === 'Escape') {
+    document.getElementById('textInputWrap').style.display = 'none'
+    textState = null
+  }
+  e.stopPropagation()
+})
 
 // ── Properties panel ─────────────────────────────────────────────────────────
 function getSelectedIdx() {
@@ -944,6 +1011,20 @@ function updatePropsPanel() {
                  {label:'Y:', field:'arc_cy', value:-s.y}])
     row('',     [{label:'半径:', field:'arc_r',  value:s.r}])
 
+  } else if (s.type === 'text') {
+    section('テキスト')
+    row('位置', [{label:'X:', field:'tx', value:s.x}, {label:'Y:', field:'ty', value:-s.y}])
+    row('', [{label:'サイズ:', field:'tfontSize', value:s.fontSize || 16}])
+    // Text content row (special: uses a text input, not number)
+    const tr = document.createElement('div'); tr.className='props-row'
+    const tl = document.createElement('span'); tl.className='props-row-label'; tl.textContent='文字'
+    const ti = document.createElement('input'); ti.type='text'; ti.className='props-inp'
+    ti.value = s.text; ti.style.width='110px'
+    ti.addEventListener('change', () => {
+      saveState(); s.text = ti.value; redraw()
+    })
+    tr.appendChild(tl); tr.appendChild(ti); body.appendChild(tr)
+
   } else if (s.type === 'polyline') {
     section('ポリライン')
     let total = 0
@@ -994,6 +1075,11 @@ function applyPropChange(field, value) {
     if      (field === 'arc_cx') s.x = value
     else if (field === 'arc_cy') s.y = -value
     else if (field === 'arc_r')  s.r = Math.abs(value)
+
+  } else if (s.type === 'text') {
+    if      (field === 'tx')        s.x = value
+    else if (field === 'ty')        s.y = -value
+    else if (field === 'tfontSize') s.fontSize = Math.max(1, value)
 
   } else if (s.type === 'polyline') {
     if (field === 'pdx') s.points.forEach(p => { p.x += value })
@@ -1099,6 +1185,9 @@ function setTool(name) {
   copyState = null
   scaleState = null
   mirrorState = null
+  // Hide floating text input when switching tools
+  document.getElementById('textInputWrap').style.display = 'none'
+  textState = null
   const needsDist = ['offset','chamfer','fillet'].includes(name)
   document.getElementById('offsetLabel').style.display = needsDist ? '' : 'none'
   document.getElementById('offsetInput').style.display = needsDist ? '' : 'none'
@@ -1192,6 +1281,16 @@ function drawGrid() {
 
 // ── Shape drawing ─────────────────────────────────────────────────────────────
 function drawShape(s, color, width, dashed) {
+  if (s.type === 'text') {
+    ctx.save()
+    ctx.font = `${s.fontSize || 16}px sans-serif`
+    ctx.fillStyle = color || '#e2e8f0'
+    if (dashed) ctx.globalAlpha = 0.55
+    ctx.fillText(s.text, s.x, s.y)
+    ctx.restore()
+    return
+  }
+
   ctx.beginPath()
   ctx.strokeStyle = color || '#e2e8f0'
   ctx.lineWidth = (width || 1.5) / engineState.transform.scale
@@ -1392,6 +1491,13 @@ canvas.addEventListener('mousedown', e => {
     engineState.selected.forEach(idx => origShapes.set(idx, JSON.parse(JSON.stringify(engineState.shapes[idx]))))
     moveState = { startW: { x: raw.x, y: raw.y }, origShapes }
     redraw(); return
+  }
+
+  if (toolState.active === 'text') {
+    // Commit any open input first, then open new one
+    if (textState) commitText()
+    showTextInput(wpt.x, wpt.y)
+    return
   }
 
   if (toolState.active === 'mirror') {
@@ -1764,7 +1870,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', z:'scale', x:'mirror', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', z:'scale', x:'mirror', a:'text', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
@@ -1867,6 +1973,8 @@ document.getElementById('saveDXF').addEventListener('click', () => {
     } else if (s.type === 'polyline') {
       dxf += `0\nLWPOLYLINE\n8\n0\n90\n${s.points.length}\n70\n0\n`
       s.points.forEach(p => { dxf += `10\n${p.x}\n20\n${-p.y}\n` })
+    } else if (s.type === 'text') {
+      dxf += `0\nTEXT\n8\n0\n10\n${s.x}\n20\n${-s.y}\n30\n0\n40\n${s.fontSize||16}\n1\n${s.text}\n`
     }
   })
   dxf += '0\nENDSEC\n0\nEOF\n'
