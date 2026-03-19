@@ -157,6 +157,65 @@ canvas {
   text-align: right;
 }
 #gridInput:focus { border-color: #475569; }
+
+/* ── Properties panel ───────────────────────────────────── */
+#props-panel {
+  position: fixed;
+  right: 0;
+  top: 44px;
+  width: 220px;
+  background: #0f172a;
+  border-left: 1px solid #1e293b;
+  display: none;
+  z-index: 5;
+  max-height: calc(100vh - 44px);
+  overflow-y: auto;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.4);
+}
+#props-panel.visible { display: block; }
+#props-panel-title {
+  padding: 7px 12px;
+  font-size: 11px;
+  font-weight: bold;
+  color: #38bdf8;
+  border-bottom: 1px solid #1e293b;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.props-section {
+  padding: 6px 12px 3px;
+  font-size: 10px;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-bottom: 1px solid #1e293b;
+}
+.props-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  flex-wrap: wrap;
+}
+.props-row-label { color: #64748b; font-size: 11px; min-width: 30px; }
+.props-field-label { color: #94a3b8; font-size: 11px; }
+.props-input {
+  background: #020617;
+  border: 1px solid #1e293b;
+  color: #e2e8f0;
+  padding: 3px 5px;
+  font-family: inherit;
+  font-size: 11px;
+  width: 74px;
+  border-radius: 2px;
+  outline: none;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+.props-input::-webkit-outer-spin-button,
+.props-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+.props-input:focus { border-color: #38bdf8; background: #0f172a; }
+.props-input[readonly] { color: #475569; cursor: default; }
 </style>
 </head>
 <body>
@@ -187,6 +246,11 @@ canvas {
 
 <canvas id="canvas"></canvas>
 <img id="print-img" alt="WebCAD Print">
+
+<div id="props-panel">
+  <div id="props-panel-title">&#12503;&#12525;&#12497;&#12486;&#12451;</div>
+  <div id="props-body"></div>
+</div>
 
 <div id="dim-bar">
   <span id="dim-bar-label">&#38263;&#12373;[,&#35282;&#24230;&#176;]:</span>
@@ -238,6 +302,7 @@ function doUndo() {
   engineState.shapes = JSON.parse(undoStack.pop())
   engineState.selected.clear()
   redraw()
+  updatePropsPanel()
 }
 
 function doRedo() {
@@ -246,6 +311,7 @@ function doRedo() {
   engineState.shapes = JSON.parse(redoStack.pop())
   engineState.selected.clear()
   redraw()
+  updatePropsPanel()
 }
 
 // ── Hit testing ───────────────────────────────────────────────────────────────
@@ -384,6 +450,150 @@ function commitDimInput() {
   redraw()
 }
 
+// ── Properties panel ─────────────────────────────────────────────────────────
+function getSelectedIdx() {
+  if (engineState.selected.size !== 1) return -1
+  return [...engineState.selected][0]
+}
+
+function updatePropsPanel() {
+  const idx = getSelectedIdx()
+  const panel = document.getElementById('props-panel')
+  const body  = document.getElementById('props-body')
+
+  if (idx < 0 || toolState.active !== 'select') {
+    panel.classList.remove('visible')
+    return
+  }
+
+  const s = engineState.shapes[idx]
+  panel.classList.add('visible')
+  body.innerHTML = ''
+
+  function section(title) {
+    const el = document.createElement('div')
+    el.className = 'props-section'
+    el.textContent = title
+    body.appendChild(el)
+  }
+
+  // fields: [{label, field, value, readonly?}]
+  function row(rowLabel, fields) {
+    const row = document.createElement('div')
+    row.className = 'props-row'
+    if (rowLabel) {
+      const l = document.createElement('span')
+      l.className = 'props-row-label'
+      l.textContent = rowLabel
+      row.appendChild(l)
+    }
+    fields.forEach(f => {
+      const fl = document.createElement('span')
+      fl.className = 'props-field-label'
+      fl.textContent = f.label
+      row.appendChild(fl)
+
+      const inp = document.createElement('input')
+      inp.type = 'number'
+      inp.className = 'props-input'
+      inp.value = +f.value.toFixed(3)
+      inp.step = 'any'
+      if (f.readonly) { inp.readOnly = true }
+      inp.dataset.field = f.field
+      inp.addEventListener('keydown', e => {
+        e.stopPropagation()
+        if (e.key === 'Enter')  e.target.blur()
+        if (e.key === 'Escape') { updatePropsPanel(); e.preventDefault() }
+      })
+      inp.addEventListener('change', e => {
+        const v = parseFloat(e.target.value)
+        if (!isNaN(v)) applyPropChange(f.field, v)
+      })
+      row.appendChild(inp)
+    })
+    body.appendChild(row)
+  }
+
+  if (s.type === 'line') {
+    section('線')
+    row('始点', [{label:'X:', field:'x1', value:s.x1},
+                 {label:'Y:', field:'y1', value:-s.y1}])
+    row('終点', [{label:'X:', field:'x2', value:s.x2},
+                 {label:'Y:', field:'y2', value:-s.y2}])
+    const len = Math.hypot(s.x2-s.x1, s.y2-s.y1)
+    const deg = Math.atan2(-(s.y2-s.y1), s.x2-s.x1) * 180 / Math.PI
+    row('', [{label:'長さ:', field:'length', value:len},
+             {label:'角度°:', field:'angle', value:deg}])
+
+  } else if (s.type === 'rect') {
+    section('矩形')
+    row('位置', [{label:'X:', field:'rx', value:s.x},
+                 {label:'Y:', field:'ry', value:-s.y}])
+    row('サイズ', [{label:'W:', field:'rw', value:s.w},
+                   {label:'H:', field:'rh', value:s.h}])
+
+  } else if (s.type === 'circle') {
+    section('円')
+    row('中心', [{label:'X:', field:'cx', value:s.x},
+                 {label:'Y:', field:'cy', value:-s.y}])
+    row('', [{label:'半径:', field:'cr', value:s.r},
+             {label:'直径:', field:'cd', value:s.r*2}])
+
+  } else if (s.type === 'polyline') {
+    section('ポリライン')
+    let total = 0
+    for (let i = 0; i < s.points.length - 1; i++)
+      total += Math.hypot(s.points[i+1].x - s.points[i].x,
+                          s.points[i+1].y - s.points[i].y)
+    row('長さ', [{label:'L:', field:'_len', value:total, readonly:true}])
+    row('移動', [{label:'ΔX:', field:'pdx', value:0},
+                 {label:'ΔY:', field:'pdy', value:0}])
+  }
+}
+
+function applyPropChange(field, value) {
+  const idx = getSelectedIdx()
+  if (idx < 0) return
+  const s = engineState.shapes[idx]
+  saveState()
+
+  if (s.type === 'line') {
+    if      (field === 'x1')     s.x1 = value
+    else if (field === 'y1')     s.y1 = -value
+    else if (field === 'x2')     s.x2 = value
+    else if (field === 'y2')     s.y2 = -value
+    else if (field === 'length') {
+      const ang = Math.atan2(-(s.y2-s.y1), s.x2-s.x1)
+      s.x2 = s.x1 + value * Math.cos(ang)
+      s.y2 = s.y1 - value * Math.sin(ang)
+    } else if (field === 'angle') {
+      const len = Math.hypot(s.x2-s.x1, s.y2-s.y1)
+      const rad = value * Math.PI / 180
+      s.x2 = s.x1 + len * Math.cos(rad)
+      s.y2 = s.y1 - len * Math.sin(rad)
+    }
+
+  } else if (s.type === 'rect') {
+    if      (field === 'rx') s.x = value
+    else if (field === 'ry') s.y = -value
+    else if (field === 'rw') s.w = value
+    else if (field === 'rh') s.h = value
+
+  } else if (s.type === 'circle') {
+    if      (field === 'cx') s.x = value
+    else if (field === 'cy') s.y = -value
+    else if (field === 'cr') s.r = Math.abs(value)
+    else if (field === 'cd') s.r = Math.abs(value) / 2
+
+  } else if (s.type === 'polyline') {
+    if (field === 'pdx') s.points.forEach(p => { p.x += value })
+    if (field === 'pdy') s.points.forEach(p => { p.y -= value })
+  }
+
+  redraw()
+  updatePropsPanel()
+}
+
 // ── Dimension annotation drawing ──────────────────────────────────────────────
 function drawDimAnnotation(s, color) {
   const scale = engineState.transform.scale
@@ -462,6 +672,7 @@ function setTool(name) {
   toolState.polyPoints = []
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
   redraw()
+  updatePropsPanel()
 }
 
 // ── Grid ──────────────────────────────────────────────────────────────────────
@@ -513,11 +724,34 @@ function drawGrid() {
   // Axes
   ctx.strokeStyle = 'rgba(100, 116, 139, 0.5)'
   ctx.lineWidth = 1
-  if (ox >= 0 && ox <= w) {
-    ctx.beginPath(); ctx.moveTo(Math.round(ox)+0.5, 0); ctx.lineTo(Math.round(ox)+0.5, h); ctx.stroke()
+  const axX = Math.round(ox) + 0.5   // screen X of Y-axis
+  const axY = Math.round(oy) + 0.5   // screen Y of X-axis
+  if (axX >= 0 && axX <= w) {
+    ctx.beginPath(); ctx.moveTo(axX, 0); ctx.lineTo(axX, h); ctx.stroke()
   }
-  if (oy >= 0 && oy <= h) {
-    ctx.beginPath(); ctx.moveTo(0, Math.round(oy)+0.5); ctx.lineTo(w, Math.round(oy)+0.5); ctx.stroke()
+  if (axY >= 0 && axY <= h) {
+    ctx.beginPath(); ctx.moveTo(0, axY); ctx.lineTo(w, axY); ctx.stroke()
+  }
+
+  // Axis labels — clamped inside the visible area
+  ctx.font = '11px Consolas, monospace'
+  ctx.fillStyle = 'rgba(100, 116, 139, 0.85)'
+  ctx.textBaseline = 'middle'
+  const margin = 4
+  // X-axis label: right edge, on the X-axis line
+  if (axY >= margin + 6 && axY <= h - margin - 6) {
+    ctx.textAlign = 'right'
+    ctx.fillText('X', Math.min(w - margin, axX > w - 30 ? axX - margin : w - margin), axY - 8)
+  }
+  // Y-axis label: top edge, on the Y-axis line
+  if (axX >= margin + 6 && axX <= w - margin - 6) {
+    ctx.textAlign = 'center'
+    ctx.fillText('Y', axX, Math.max(margin + 6, axY < 20 ? axY + 14 : margin + 6))
+  }
+  // Origin label
+  if (axX >= 0 && axX <= w && axY >= 0 && axY <= h) {
+    ctx.textAlign = 'left'
+    ctx.fillText('O', axX + 3, axY - 8)
   }
 
   ctx.restore()
@@ -619,7 +853,9 @@ canvas.addEventListener('mousedown', e => {
       }
     }
     if (!hit) engineState.selected.clear()
-    redraw(); return
+    redraw()
+    updatePropsPanel()
+    return
   }
 
   if (toolState.active === 'polyline') {
