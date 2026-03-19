@@ -228,6 +228,7 @@ canvas {
   <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
   <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
   <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
+  <button data-tool="trim"     title="Trim (T)">&#9988; Trim</button>
   <div class="sep"></div>
   <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
   <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
@@ -447,6 +448,88 @@ function commitDimInput() {
   toolState.previewShape = null
   toolState.startW = null
   hideDimBar()
+  redraw()
+}
+
+// ── Trim tool ────────────────────────────────────────────────────────────────
+let trimPreview = null  // {x1,y1,x2,y2} of the segment to be removed
+
+// Intersection parameter t ∈ [0,1] of line AB with segment CD (both must be within bounds)
+function lineSegIntersectT(ax,ay,bx,by, cx,cy,dx,dy) {
+  const ex=bx-ax, ey=by-ay, fx=dx-cx, fy=dy-cy
+  const denom = ex*fy - ey*fx
+  if (Math.abs(denom) < 1e-10) return []
+  const t = ((cx-ax)*fy - (cy-ay)*fx) / denom
+  const s = ((cx-ax)*ey - (cy-ay)*ex) / denom
+  if (t < -1e-9 || t > 1+1e-9 || s < -1e-9 || s > 1+1e-9) return []
+  return [Math.max(0, Math.min(1, t))]
+}
+
+// Intersection parameters of line AB with circle (cx,cy,r)
+function lineCircleTs(ax,ay,bx,by, cx,cy,r) {
+  const dx=bx-ax, dy=by-ay, fx=ax-cx, fy=ay-cy
+  const a=dx*dx+dy*dy, b=2*(dx*fx+dy*fy), c=fx*fx+fy*fy-r*r
+  const disc = b*b-4*a*c
+  if (disc < 0 || a < 1e-10) return []
+  const sq = Math.sqrt(disc)
+  return [(-b-sq)/(2*a), (-b+sq)/(2*a)]
+    .filter(t => t >= -1e-9 && t <= 1+1e-9)
+    .map(t => Math.max(0, Math.min(1, t)))
+}
+
+// All intersection t-values on line (ax,ay)-(bx,by) against every other shape
+function intersectionsOnLine(excludeIdx, ax,ay,bx,by) {
+  const ts = []
+  engineState.shapes.forEach((s, i) => {
+    if (i === excludeIdx) return
+    if (s.type === 'line') {
+      ts.push(...lineSegIntersectT(ax,ay,bx,by, s.x1,s.y1,s.x2,s.y2))
+    } else if (s.type === 'rect') {
+      const x1=s.x, y1=s.y, x2=s.x+s.w, y2=s.y+s.h
+      ;[[x1,y1,x2,y1],[x2,y1,x2,y2],[x2,y2,x1,y2],[x1,y2,x1,y1]]
+        .forEach(e => ts.push(...lineSegIntersectT(ax,ay,bx,by, e[0],e[1],e[2],e[3])))
+    } else if (s.type === 'circle') {
+      ts.push(...lineCircleTs(ax,ay,bx,by, s.x,s.y,s.r))
+    } else if (s.type === 'polyline') {
+      for (let k=0; k<s.points.length-1; k++)
+        ts.push(...lineSegIntersectT(ax,ay,bx,by,
+          s.points[k].x,s.points[k].y,s.points[k+1].x,s.points[k+1].y))
+    }
+  })
+  // Deduplicate & sort
+  const uniq = []
+  ts.sort((a,b)=>a-b).forEach(t => {
+    if (!uniq.length || t-uniq[uniq.length-1] > 1e-6) uniq.push(t)
+  })
+  return uniq
+}
+
+// Find the interval [ta,tb] that the click falls in
+function trimInterval(excludeIdx, s, clickT) {
+  const ts = intersectionsOnLine(excludeIdx, s.x1,s.y1,s.x2,s.y2)
+  if (!ts.length) return null
+  const bounds = [0, ...ts, 1]
+  for (let i=0; i<bounds.length-1; i++) {
+    if (clickT >= bounds[i]-1e-6 && clickT <= bounds[i+1]+1e-6)
+      return { ta: bounds[i], tb: bounds[i+1] }
+  }
+  return null
+}
+
+function doTrim(shapeIdx, clickT) {
+  const s = engineState.shapes[shapeIdx]
+  if (s.type !== 'line') return
+  const seg = trimInterval(shapeIdx, s, clickT)
+  if (!seg) return
+  const { ta, tb } = seg
+  const lerp = t => ({ x: s.x1+t*(s.x2-s.x1), y: s.y1+t*(s.y2-s.y1) })
+  saveState()
+  const keep = []
+  if (ta > 1e-6)   { const p=lerp(ta); keep.push({type:'line',x1:s.x1,y1:s.y1,x2:p.x,y2:p.y}) }
+  if (tb < 1-1e-6) { const p=lerp(tb); keep.push({type:'line',x1:p.x,y1:p.y,x2:s.x2,y2:s.y2}) }
+  engineState.shapes.splice(shapeIdx, 1, ...keep)
+  engineState.selected.clear()
+  trimPreview = null
   redraw()
 }
 
@@ -673,6 +756,7 @@ function setTool(name) {
   toolState.drawing = false
   toolState.previewShape = null
   toolState.polyPoints = []
+  trimPreview = null
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
   redraw()
   updatePropsPanel()
@@ -802,6 +886,12 @@ function redraw() {
     drawDimAnnotation(toolState.previewShape, '#facc15')
   }
 
+  // Trim preview: red highlight on the segment that will be removed
+  if (trimPreview) {
+    drawShape({type:'line', x1:trimPreview.x1, y1:trimPreview.y1,
+                            x2:trimPreview.x2, y2:trimPreview.y2}, '#ef4444', 3.5)
+  }
+
   // Draw polyline points
   if (toolState.active === 'polyline' && toolState.polyPoints.length > 0) {
     toolState.polyPoints.forEach(p => {
@@ -864,6 +954,20 @@ canvas.addEventListener('mousedown', e => {
   const raw = screenToWorld(e.offsetX, e.offsetY)
   const wpt = snapToGrid(raw.x, raw.y)
 
+  if (toolState.active === 'trim') {
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      const s = engineState.shapes[i]
+      if (s.type === 'line' && hitTest(s, raw.x, raw.y)) {
+        const dx=s.x2-s.x1, dy=s.y2-s.y1, len2=dx*dx+dy*dy
+        if (len2 < 1e-10) break
+        const t = Math.max(0, Math.min(1, ((raw.x-s.x1)*dx+(raw.y-s.y1)*dy)/len2))
+        doTrim(i, t)
+        break
+      }
+    }
+    return
+  }
+
   if (toolState.active === 'select') {
     let hit = false
     for (let i = engineState.shapes.length - 1; i >= 0; i--) {
@@ -904,6 +1008,28 @@ window.addEventListener('mousemove', e => {
   const wpt = snapToGrid(raw.x, raw.y)
 
   document.getElementById('coords').textContent = `X: ${wpt.x.toFixed(1)}  Y: ${(-wpt.y).toFixed(1)}`
+
+  // Trim: hover preview
+  if (toolState.active === 'trim') {
+    trimPreview = null
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      const s = engineState.shapes[i]
+      if (s.type === 'line' && hitTest(s, raw.x, raw.y)) {
+        const dx=s.x2-s.x1, dy=s.y2-s.y1, len2=dx*dx+dy*dy
+        if (len2 < 1e-10) break
+        const t = Math.max(0, Math.min(1, ((raw.x-s.x1)*dx+(raw.y-s.y1)*dy)/len2))
+        const seg = trimInterval(i, s, t)
+        if (seg) {
+          const lerp = u => ({ x:s.x1+u*(s.x2-s.x1), y:s.y1+u*(s.y2-s.y1) })
+          const a=lerp(seg.ta), b=lerp(seg.tb)
+          trimPreview = { x1:a.x, y1:a.y, x2:b.x, y2:b.y }
+        }
+        break
+      }
+    }
+    redraw()
+    return
+  }
 
   if (!toolState.drawing) { toolState.previewShape = null; return }
 
@@ -973,7 +1099,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select' }
+  const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select', t: 'trim' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
