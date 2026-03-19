@@ -224,6 +224,7 @@ canvas {
   <span class="brand">WebCAD</span>
   <div class="sep"></div>
   <button data-tool="select"   title="Select (S)">&#9654; Select</button>
+  <button data-tool="move"     title="Move (M)">&#8680; Move</button>
   <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
   <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
   <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
@@ -756,6 +757,21 @@ function doFillet(idx1, idx2) {
   redraw()
 }
 
+// ── Move tool ─────────────────────────────────────────────────────────────────
+let moveState = null   // {startW:{x,y}, origShapes:Map<idx,shapeCopy>} | null
+
+function moveShapeFromOrig(s, orig, dx, dy) {
+  if (s.type === 'line') {
+    s.x1=orig.x1+dx; s.y1=orig.y1+dy; s.x2=orig.x2+dx; s.y2=orig.y2+dy
+  } else if (s.type === 'rect') {
+    s.x=orig.x+dx; s.y=orig.y+dy
+  } else if (s.type === 'circle' || s.type === 'arc') {
+    s.x=orig.x+dx; s.y=orig.y+dy
+  } else if (s.type === 'polyline') {
+    s.points.forEach((p,i) => { p.x=orig.points[i].x+dx; p.y=orig.points[i].y+dy })
+  }
+}
+
 // ── Properties panel ─────────────────────────────────────────────────────────
 function getSelectedIdx() {
   if (engineState.selected.size !== 1) return -1
@@ -1002,10 +1018,12 @@ function setTool(name) {
   chamferSel = null
   filletPreview = null
   filletSel = null
+  moveState = null
   const needsDist = ['offset','chamfer','fillet'].includes(name)
   document.getElementById('offsetLabel').style.display = needsDist ? '' : 'none'
   document.getElementById('offsetInput').style.display = needsDist ? '' : 'none'
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
+  canvas.style.cursor = name === 'move' ? 'move' : ''
   redraw()
   updatePropsPanel()
 }
@@ -1244,6 +1262,24 @@ canvas.addEventListener('mousedown', e => {
     return
   }
 
+  if (toolState.active === 'move') {
+    let hit = -1
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      if (hitTest(engineState.shapes[i], raw.x, raw.y)) { hit=i; break }
+    }
+    if (hit < 0) { engineState.selected.clear(); moveState=null; redraw(); return }
+    if (!engineState.selected.has(hit)) {
+      engineState.selected.clear()
+      engineState.selected.add(hit)
+      updatePropsPanel()
+    }
+    saveState()
+    const origShapes = new Map()
+    engineState.selected.forEach(idx => origShapes.set(idx, JSON.parse(JSON.stringify(engineState.shapes[idx]))))
+    moveState = { startW: { x: raw.x, y: raw.y }, origShapes }
+    redraw(); return
+  }
+
   if (toolState.active === 'fillet') {
     let hit = -1
     for (let i=engineState.shapes.length-1; i>=0; i--) {
@@ -1359,6 +1395,17 @@ window.addEventListener('mousemove', e => {
     redraw(); return
   }
 
+  // Move drag
+  if (toolState.active === 'move' && moveState) {
+    const dx = wpt.x - moveState.startW.x
+    const dy = wpt.y - moveState.startW.y
+    engineState.selected.forEach(idx => {
+      moveShapeFromOrig(engineState.shapes[idx], moveState.origShapes.get(idx), dx, dy)
+    })
+    updatePropsPanel()
+    redraw(); return
+  }
+
   // Fillet hover preview
   if (toolState.active === 'fillet') {
     filletPreview = null
@@ -1450,6 +1497,9 @@ window.addEventListener('mousemove', e => {
 
 window.addEventListener('mouseup', e => {
   if (e.button === 1 || panning) { panning = false; return }
+  if (e.button === 0 && toolState.active === 'move' && moveState) {
+    moveState = null; return
+  }
   if (e.button !== 0 || !toolState.drawing) return
   if (toolState.active === 'polyline' || toolState.active === 'select') return
 
@@ -1496,7 +1546,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
