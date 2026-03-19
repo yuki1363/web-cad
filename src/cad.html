@@ -12,22 +12,28 @@ body {
   font-family: 'Consolas', 'Menlo', monospace;
   overflow: hidden;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
-#toolbar {
+/* ── Top bar ────────────────────────────────────── */
+#topbar {
   background: #0f172a;
   border-bottom: 1px solid #1e293b;
-  padding: 6px 10px;
+  padding: 0 8px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 44px;
+  gap: 5px;
+  height: 36px;
+  flex-shrink: 0;
   flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .brand {
   font-weight: bold;
-  font-size: 14px;
+  font-size: 13px;
   color: #38bdf8;
   letter-spacing: 1px;
   white-space: nowrap;
@@ -35,18 +41,18 @@ body {
 
 .sep {
   width: 1px;
-  height: 24px;
+  height: 22px;
   background: #1e293b;
   flex-shrink: 0;
 }
 
-.spacer { flex: 1; }
+.spacer { flex: 1; min-width: 0; }
 
 button {
   background: #1e293b;
   border: 1px solid #334155;
   color: #cbd5e1;
-  padding: 5px 10px;
+  padding: 4px 9px;
   cursor: pointer;
   font-family: inherit;
   font-size: 12px;
@@ -68,21 +74,77 @@ button.active {
 }
 
 #coords {
-  font-size: 12px;
+  font-size: 11px;
   color: #64748b;
-  padding: 4px 8px;
-  background: #0f172a;
+  padding: 3px 7px;
+  background: #020617;
   border: 1px solid #1e293b;
   border-radius: 3px;
-  min-width: 160px;
+  min-width: 148px;
   text-align: right;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Main layout ────────────────────────────────── */
+#layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Left sidebar ───────────────────────────────── */
+#sidebar {
+  width: 112px;
+  background: #0f172a;
+  border-right: 1px solid #1e293b;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 3px;
+  gap: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #1e293b transparent;
+}
+
+.tool-group-label {
+  font-size: 9px;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 5px 2px 2px;
+  border-top: 1px solid #1e293b;
+  margin-top: 2px;
+}
+.tool-group-label:first-child { border-top: none; margin-top: 0; }
+
+.tool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+#sidebar button {
+  padding: 5px 1px;
+  font-size: 10.5px;
+  text-align: center;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
 }
 
 canvas {
   display: block;
   background: #020617;
   cursor: crosshair;
+  flex: 1;
+  min-width: 0;
 }
 
 #hint {
@@ -101,7 +163,7 @@ canvas {
 }
 
 @media print {
-  #toolbar, #hint { display: none !important; }
+  #topbar, #hint { display: none !important; }
   body { background: white; overflow: visible; }
   canvas { display: none !important; }
   #print-img { display: block !important; width: 100%; height: auto; }
@@ -162,13 +224,13 @@ canvas {
 #props-panel {
   position: fixed;
   right: 0;
-  top: 44px;
+  top: 36px;
   width: 220px;
   background: #0f172a;
   border-left: 1px solid #1e293b;
   display: none;
   z-index: 5;
-  max-height: calc(100vh - 44px);
+  max-height: calc(100vh - 36px);
   overflow-y: auto;
   box-shadow: -4px 0 16px rgba(0,0,0,0.4);
 }
@@ -220,45 +282,67 @@ canvas {
 </head>
 <body>
 
-<div id="toolbar">
+<!-- ─── Top bar ────────────────────────────────────────── -->
+<div id="topbar">
   <span class="brand">WebCAD</span>
-  <div class="sep"></div>
-  <button data-tool="select"   title="Select (S)">&#9654; Select</button>
-  <button data-tool="move"     title="Move (M)">&#8680; Move</button>
-  <button data-tool="copy"     title="Copy (Y)">&#9107; Copy</button>
-  <button data-tool="scale"    title="Scale (Z)">&#8693; Scale</button>
-  <button data-tool="mirror"   title="Mirror (X)">&#8596; Mirror</button>
-  <button data-tool="text"     title="Text (A)">&#65332; Text</button>
-  <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
-  <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
-  <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
-  <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
-  <button data-tool="trim"     title="Trim (T)">&#9988; Trim</button>
-  <button data-tool="extend"   title="Extend (E)">&#8614; Extend</button>
-  <button data-tool="offset"   title="Offset (O)">&#8644; Offset</button>
-  <button data-tool="chamfer"  title="Chamfer (F)">&#9189; Chamfer</button>
-  <button data-tool="fillet"   title="Fillet (I)">&#9711; Fillet</button>
   <div class="sep"></div>
   <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
   <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
   <div class="sep"></div>
   <button id="clearBtn">&#128465; Clear</button>
   <button id="saveDXF">&#8659; DXF</button>
-  <button id="printBtn">&#128438; PDF&#21360;&#21029;</button>
-  <div class="spacer"></div>
-  <button id="dimBtn">&#128207; &#23546;&#27861;: OFF</button>
+  <button id="printBtn">&#128438; PDF</button>
   <div class="sep"></div>
+  <button id="dimBtn">&#128207; &#23546;&#27861;: OFF</button>
+  <div class="spacer"></div>
   <span class="grid-label" id="offsetLabel" style="display:none">&#36317;&#31163;:</span>
   <input id="offsetInput" type="number" value="20" min="0.1" step="any"
-         style="display:none;width:58px" class="grid-label" title="Offset/Chamfer &#36317;&#31163;">
-  <div class="sep"></div>
+         style="display:none;width:54px" class="grid-label" title="Offset/Chamfer &#36317;&#31163;">
   <span class="grid-label">&#26684;&#23376;:</span>
-  <input id="gridInput" type="number" value="50" min="1" max="10000" step="1" title="&#26684;&#23376;&#12398;&#22522;&#672C;&#12469;&#12452;&#12474;">
+  <input id="gridInput" type="number" value="50" min="1" max="10000" step="1"
+         title="&#26684;&#23376;&#12398;&#22522;&#26412;&#12469;&#12452;&#12474;">
   <button id="snapBtn">Snap: OFF</button>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
-<canvas id="canvas"></canvas>
+<!-- ─── Main layout ───────────────────────────────────── -->
+<div id="layout">
+
+  <!-- Left sidebar -->
+  <div id="sidebar">
+    <div class="tool-group-label">&#20316;&#22259;</div>
+    <div class="tool-grid">
+      <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
+      <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
+      <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
+      <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
+      <button data-tool="text"     title="Text (A)">T Text</button>
+    </div>
+
+    <div class="tool-group-label">&#36984;&#25321;&#12539;&#22793;&#25563;</div>
+    <div class="tool-grid">
+      <button data-tool="select"   title="Select (S)">&#9654; Sel</button>
+      <button data-tool="move"     title="Move (M)">&#8680; Move</button>
+      <button data-tool="copy"     title="Copy (Y)">&#9107; Copy</button>
+      <button data-tool="scale"    title="Scale (Z)">&#8693; Scale</button>
+      <button data-tool="mirror"   title="Mirror (X)">&#8596; Mirror</button>
+    </div>
+
+    <div class="tool-group-label">&#20462;&#27491;</div>
+    <div class="tool-grid">
+      <button data-tool="trim"     title="Trim (T)">&#9988; Trim</button>
+      <button data-tool="extend"   title="Extend (E)">&#8614; Ext</button>
+      <button data-tool="offset"   title="Offset (O)">&#8644; Ofs</button>
+      <button data-tool="chamfer"  title="Chamfer (F)">&#9189; Chmf</button>
+      <button data-tool="fillet"   title="Fillet (I)">&#9711; Fill</button>
+    </div>
+  </div>
+
+  <!-- Drawing canvas -->
+  <canvas id="canvas"></canvas>
+
+</div><!-- #layout -->
+
 <div id="textInputWrap" style="position:fixed;display:none;z-index:200">
   <input id="textInput" type="text" placeholder="テキスト入力…"
          style="background:#1e293b;color:#f1f5f9;border:1.5px solid #a78bfa;
@@ -1420,7 +1504,7 @@ const ctx = canvas.getContext('2d')
 
 function resize() {
   canvas.width = window.innerWidth
-  canvas.height = window.innerHeight - document.getElementById('toolbar').offsetHeight
+  canvas.height = window.innerHeight - document.getElementById('topbar').offsetHeight
   redraw()
 }
 window.addEventListener('resize', resize)
