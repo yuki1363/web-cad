@@ -232,6 +232,7 @@ canvas {
   <button data-tool="extend"   title="Extend (E)">&#8614; Extend</button>
   <button data-tool="offset"   title="Offset (O)">&#8644; Offset</button>
   <button data-tool="chamfer"  title="Chamfer (F)">&#9189; Chamfer</button>
+  <button data-tool="fillet"   title="Fillet (I)">&#9711; Fillet</button>
   <div class="sep"></div>
   <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
   <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
@@ -342,6 +343,7 @@ function hitTest(s, x, y) {
            (Math.abs(y - My) < T && x > mx - T && x < Mx + T)
   }
   if (s.type === 'circle') return Math.abs(Math.hypot(x - s.x, y - s.y) - s.r) < T
+  if (s.type === 'arc')    return Math.abs(Math.hypot(x - s.x, y - s.y) - s.r) < T
   if (s.type === 'polyline') {
     for (let i = 0; i < s.points.length - 1; i++) {
       if (distToSegment(x, y, s.points[i].x, s.points[i].y, s.points[i+1].x, s.points[i+1].y) < T) return true
@@ -680,6 +682,80 @@ function computeChamfer(s1, s2) {
   return {ip, p1, p2}
 }
 
+// ── Fillet tool ───────────────────────────────────────────────────────────────
+let filletSel = null
+let filletPreview = null   // {arc, t1, t2, ip}
+
+function computeFillet(s1, s2, radius) {
+  const ip = lineLinePoint(s1, s2)
+  if (!ip) return null
+  const { x: ix, y: iy } = ip
+
+  function unitAway(s) {
+    const dx=s.x2-s.x1, dy=s.y2-s.y1, len=Math.hypot(dx,dy)
+    if (len<1e-10) return null
+    const d1=Math.hypot(s.x1-ix,s.y1-iy), d2=Math.hypot(s.x2-ix,s.y2-iy)
+    return d1>d2 ? {x:-dx/len,y:-dy/len} : {x:dx/len,y:dy/len}
+  }
+
+  const u1=unitAway(s1), u2=unitAway(s2)
+  if (!u1||!u2) return null
+
+  const dot = Math.max(-1, Math.min(1, u1.x*u2.x + u1.y*u2.y))
+  const angle = Math.acos(dot)
+  if (angle < 1e-4 || Math.abs(angle-Math.PI) < 1e-4) return null
+
+  const tanH=Math.tan(angle/2), sinH=Math.sin(angle/2)
+  if (Math.abs(tanH)<1e-10 || Math.abs(sinH)<1e-10) return null
+
+  const d=radius/tanH, cd=radius/sinH
+  const t1={x:ix+u1.x*d, y:iy+u1.y*d}
+  const t2={x:ix+u2.x*d, y:iy+u2.y*d}
+
+  const bx=u1.x+u2.x, by=u1.y+u2.y, bl=Math.hypot(bx,by)
+  if (bl<1e-10) return null
+  const acx=ix+(bx/bl)*cd, acy=iy+(by/bl)*cd
+
+  const sa=Math.atan2(t1.y-acy, t1.x-acx)
+  const ea=Math.atan2(t2.y-acy, t2.x-acx)
+
+  // Pick the arc direction whose midpoint is closer to the intersection point
+  function arcMid(a1,a2,anti) {
+    const span = anti ? (a1-a2+2*Math.PI)%(2*Math.PI) : (a2-a1+2*Math.PI)%(2*Math.PI)
+    const mid  = anti ? a1-span/2 : a1+span/2
+    return {x:acx+radius*Math.cos(mid), y:acy+radius*Math.sin(mid)}
+  }
+  const ma=arcMid(sa,ea,false), mb=arcMid(sa,ea,true)
+  const anticlockwise = Math.hypot(mb.x-ix,mb.y-iy) < Math.hypot(ma.x-ix,ma.y-iy)
+
+  return {
+    arc: {type:'arc', x:acx, y:acy, r:radius, startAngle:sa, endAngle:ea, anticlockwise},
+    t1, t2, ip:{x:ix,y:iy}
+  }
+}
+
+function doFillet(idx1, idx2) {
+  const s1=engineState.shapes[idx1], s2=engineState.shapes[idx2]
+  const result = computeFillet(s1, s2, offsetDist)
+  if (!result) return
+  saveState()
+  function trimLineTo(s, pt, ipPt) {
+    const dx=s.x2-s.x1, dy=s.y2-s.y1, len2=dx*dx+dy*dy
+    if (len2<1e-10) return
+    const t=((pt.x-s.x1)*dx+(pt.y-s.y1)*dy)/len2
+    const np={x:s.x1+t*dx, y:s.y1+t*dy}
+    const dc1=Math.hypot(s.x1-ipPt.x,s.y1-ipPt.y)
+    const dc2=Math.hypot(s.x2-ipPt.x,s.y2-ipPt.y)
+    if (dc1>dc2) { s.x2=np.x; s.y2=np.y } else { s.x1=np.x; s.y1=np.y }
+  }
+  trimLineTo(s1, result.t1, result.ip)
+  trimLineTo(s2, result.t2, result.ip)
+  engineState.shapes.push(result.arc)
+  filletSel=null; filletPreview=null
+  engineState.selected.clear()
+  redraw()
+}
+
 // ── Properties panel ─────────────────────────────────────────────────────────
 function getSelectedIdx() {
   if (engineState.selected.size !== 1) return -1
@@ -769,6 +845,12 @@ function updatePropsPanel() {
     row('', [{label:'半径:', field:'cr', value:s.r},
              {label:'直径:', field:'cd', value:s.r*2}])
 
+  } else if (s.type === 'arc') {
+    section('円弧')
+    row('中心', [{label:'X:', field:'arc_cx', value:s.x},
+                 {label:'Y:', field:'arc_cy', value:-s.y}])
+    row('',     [{label:'半径:', field:'arc_r',  value:s.r}])
+
   } else if (s.type === 'polyline') {
     section('ポリライン')
     let total = 0
@@ -814,6 +896,11 @@ function applyPropChange(field, value) {
     else if (field === 'cy') s.y = -value
     else if (field === 'cr') s.r = Math.abs(value)
     else if (field === 'cd') s.r = Math.abs(value) / 2
+
+  } else if (s.type === 'arc') {
+    if      (field === 'arc_cx') s.x = value
+    else if (field === 'arc_cy') s.y = -value
+    else if (field === 'arc_r')  s.r = Math.abs(value)
 
   } else if (s.type === 'polyline') {
     if (field === 'pdx') s.points.forEach(p => { p.x += value })
@@ -877,6 +964,11 @@ function drawDimAnnotation(s, color) {
     if (s.r < 1e-6) { ctx.restore(); return }
     labelAt(s.x, s.y - s.r - 16 / scale, `R: ${s.r.toFixed(1)}`)
     labelAt(s.x, s.y - s.r - 16 / scale - fs * 1.8, `⌀${(s.r * 2).toFixed(1)}`)
+  } else if (s.type === 'arc') {
+    if (s.r < 1e-6) { ctx.restore(); return }
+    const ma = (s.startAngle + s.endAngle) / 2
+    labelAt(s.x + Math.cos(ma) * (s.r + 18/scale), s.y + Math.sin(ma) * (s.r + 18/scale),
+            `R: ${s.r.toFixed(1)}`)
 
   } else if (s.type === 'polyline' && s.points.length >= 2) {
     let total = 0
@@ -908,7 +1000,9 @@ function setTool(name) {
   offsetPreview = null
   chamferPreview = null
   chamferSel = null
-  const needsDist = ['offset','chamfer'].includes(name)
+  filletPreview = null
+  filletSel = null
+  const needsDist = ['offset','chamfer','fillet'].includes(name)
   document.getElementById('offsetLabel').style.display = needsDist ? '' : 'none'
   document.getElementById('offsetInput').style.display = needsDist ? '' : 'none'
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
@@ -1011,6 +1105,8 @@ function drawShape(s, color, width, dashed) {
     ctx.rect(s.x, s.y, s.w, s.h)
   } else if (s.type === 'circle') {
     ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+  } else if (s.type === 'arc') {
+    ctx.arc(s.x, s.y, s.r, s.startAngle, s.endAngle, s.anticlockwise)
   } else if (s.type === 'polyline') {
     if (s.points.length < 2) return
     ctx.moveTo(s.points[0].x, s.points[0].y)
@@ -1042,6 +1138,12 @@ function redraw() {
 
   // Offset preview
   if (offsetPreview) drawShape(offsetPreview, '#a78bfa', 1.5, true)
+
+  // Fillet preview
+  if (filletPreview) {
+    drawShape(filletPreview.arc, '#fb923c', 2, true)
+    if (filletSel !== null) drawShape(engineState.shapes[filletSel], '#fb923c', 2.5, false)
+  }
 
   // Chamfer preview
   if (chamferPreview) {
@@ -1138,6 +1240,20 @@ canvas.addEventListener('mousedown', e => {
         if (ns) { saveState(); engineState.shapes.push(ns); redraw() }
         break
       }
+    }
+    return
+  }
+
+  if (toolState.active === 'fillet') {
+    let hit = -1
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      if (engineState.shapes[i].type==='line' && hitTest(engineState.shapes[i], raw.x, raw.y)) { hit=i; break }
+    }
+    if (hit < 0) { filletSel=null; filletPreview=null; redraw(); return }
+    if (filletSel === null) {
+      filletSel = hit; redraw()
+    } else if (filletSel !== hit) {
+      doFillet(filletSel, hit)
     }
     return
   }
@@ -1239,6 +1355,21 @@ window.addEventListener('mousemove', e => {
     for (let i=engineState.shapes.length-1; i>=0; i--) {
       const s = engineState.shapes[i]
       if (hitTest(s, raw.x, raw.y)) { offsetPreview = computeOffsetShape(s, raw.x, raw.y); break }
+    }
+    redraw(); return
+  }
+
+  // Fillet hover preview
+  if (toolState.active === 'fillet') {
+    filletPreview = null
+    if (filletSel !== null) {
+      for (let i=engineState.shapes.length-1; i>=0; i--) {
+        const s=engineState.shapes[i]
+        if (i!==filletSel && s.type==='line' && hitTest(s, raw.x, raw.y)) {
+          filletPreview = computeFillet(engineState.shapes[filletSel], s, offsetDist)
+          break
+        }
+      }
     }
     redraw(); return
   }
@@ -1365,7 +1496,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', t:'trim', e:'extend', o:'offset', f:'chamfer' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
@@ -1459,6 +1590,12 @@ document.getElementById('saveDXF').addEventListener('click', () => {
       dxf += `0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n${x1}\n20\n${-y1}\n10\n${x2}\n20\n${-y1}\n10\n${x2}\n20\n${-y2}\n10\n${x1}\n20\n${-y2}\n`
     } else if (s.type === 'circle') {
       dxf += `0\nCIRCLE\n8\n0\n10\n${s.x}\n20\n${-s.y}\n30\n0\n40\n${s.r}\n`
+    } else if (s.type === 'arc') {
+      // DXF angles: degrees CCW from +X, Y-up (so negate canvas angles)
+      const toDeg = a => { let d=(-a*180/Math.PI)%360; return d<0?d+360:d }
+      const sa=toDeg(s.startAngle), ea=toDeg(s.endAngle)
+      const [dsa,dea] = s.anticlockwise ? [ea,sa] : [sa,ea]
+      dxf += `0\nARC\n8\n0\n10\n${s.x}\n20\n${-s.y}\n30\n0\n40\n${s.r}\n50\n${dsa}\n51\n${dea}\n`
     } else if (s.type === 'polyline') {
       dxf += `0\nLWPOLYLINE\n8\n0\n90\n${s.points.length}\n70\n0\n`
       s.points.forEach(p => { dxf += `10\n${p.x}\n20\n${-p.y}\n` })
