@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Web CAD Pro</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #020617;
+  color: #e2e8f0;
+  font-family: 'Consolas', 'Menlo', monospace;
+  overflow: hidden;
+  user-select: none;
+}
+
+#toolbar {
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  flex-wrap: nowrap;
+}
+
+.brand {
+  font-weight: bold;
+  font-size: 14px;
+  color: #38bdf8;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.sep {
+  width: 1px;
+  height: 24px;
+  background: #1e293b;
+  flex-shrink: 0;
+}
+
+.spacer { flex: 1; }
+
+button {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  border-radius: 3px;
+  white-space: nowrap;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+button:hover {
+  background: #334155;
+  border-color: #475569;
+  color: #f1f5f9;
+}
+
+button.active {
+  background: #0369a1;
+  border-color: #38bdf8;
+  color: #e0f2fe;
+}
+
+#coords {
+  font-size: 12px;
+  color: #64748b;
+  padding: 4px 8px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 3px;
+  min-width: 160px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+canvas {
+  display: block;
+  background: #020617;
+  cursor: crosshair;
+}
+
+#hint {
+  position: fixed;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #1e293b;
+  color: #64748b;
+  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <span class="brand">WebCAD</span>
+  <div class="sep"></div>
+  <button data-tool="select"   title="Select (S)">&#9654; Select</button>
+  <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
+  <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
+  <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
+  <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
+  <div class="sep"></div>
+  <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
+  <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
+  <div class="sep"></div>
+  <button id="clearBtn">&#128465; Clear</button>
+  <button id="saveDXF">&#8659; DXF</button>
+  <div class="spacer"></div>
+  <button id="snapBtn" class="active">Snap: ON</button>
+  <div id="coords">X: 0.0  Y: 0.0</div>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<div id="hint">
+  <b>Shortcuts:</b>
+  L=Line&nbsp; R=Rect&nbsp; C=Circle&nbsp; P=Polyline&nbsp; S=Select
+  | Space+drag=Pan&nbsp; Scroll=Zoom&nbsp; F9=Snap
+  | Del=Delete selected&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const engineState = {
+  shapes: [],
+  selected: new Set(),
+  transform: { x: 0, y: 0, scale: 1 },
+}
+
+// ── Coord transforms ─────────────────────────────────────────────────────────
+function screenToWorld(sx, sy) {
+  const { x, y, scale } = engineState.transform
+  return { x: (sx - x) / scale, y: (sy - y) / scale }
+}
+
+function zoomAt(screenX, screenY, factor) {
+  const { x, y, scale } = engineState.transform
+  const newScale = Math.min(Math.max(scale * factor, 0.02), 500)
+  engineState.transform.x = screenX - (screenX - x) * (newScale / scale)
+  engineState.transform.y = screenY - (screenY - y) * (newScale / scale)
+  engineState.transform.scale = newScale
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+let undoStack = [], redoStack = []
+
+function saveState() {
+  undoStack.push(JSON.stringify(engineState.shapes))
+  redoStack = []
+}
+
+function doUndo() {
+  if (!undoStack.length) return
+  redoStack.push(JSON.stringify(engineState.shapes))
+  engineState.shapes = JSON.parse(undoStack.pop())
+  engineState.selected.clear()
+  redraw()
+}
+
+function doRedo() {
+  if (!redoStack.length) return
+  undoStack.push(JSON.stringify(engineState.shapes))
+  engineState.shapes = JSON.parse(redoStack.pop())
+  engineState.selected.clear()
+  redraw()
+}
+
+// ── Hit testing ───────────────────────────────────────────────────────────────
+function distToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay
+  if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay)
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)))
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+}
+
+function hitTest(s, x, y) {
+  const T = 6 / engineState.transform.scale
+  if (s.type === 'line') return distToSegment(x, y, s.x1, s.y1, s.x2, s.y2) < T
+  if (s.type === 'rect') {
+    const mx = Math.min(s.x, s.x + s.w), Mx = Math.max(s.x, s.x + s.w)
+    const my = Math.min(s.y, s.y + s.h), My = Math.max(s.y, s.y + s.h)
+    return (Math.abs(x - mx) < T && y > my - T && y < My + T) ||
+           (Math.abs(x - Mx) < T && y > my - T && y < My + T) ||
+           (Math.abs(y - my) < T && x > mx - T && x < Mx + T) ||
+           (Math.abs(y - My) < T && x > mx - T && x < Mx + T)
+  }
+  if (s.type === 'circle') return Math.abs(Math.hypot(x - s.x, y - s.y) - s.r) < T
+  if (s.type === 'polyline') {
+    for (let i = 0; i < s.points.length - 1; i++) {
+      if (distToSegment(x, y, s.points[i].x, s.points[i].y, s.points[i+1].x, s.points[i+1].y) < T) return true
+    }
+  }
+  return false
+}
+
+// ── Tool state ────────────────────────────────────────────────────────────────
+const toolState = {
+  active: 'line',
+  drawing: false,
+  startW: null,
+  previewShape: null,
+  polyPoints: [],
+  snapEnabled: true,
+}
+
+function snapToGrid(x, y) {
+  if (!toolState.snapEnabled) return { x, y }
+  return { x: Math.round(x / gridSpacing) * gridSpacing, y: Math.round(y / gridSpacing) * gridSpacing }
+}
+
+function setTool(name) {
+  toolState.active = name
+  toolState.drawing = false
+  toolState.previewShape = null
+  toolState.polyPoints = []
+  document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
+  redraw()
+}
+
+// ── Grid ──────────────────────────────────────────────────────────────────────
+let gridSpacing = 50
+
+function drawGrid() {
+  const { x: ox, y: oy, scale } = engineState.transform
+  const w = canvas.width, h = canvas.height
+
+  let spacing = 50
+  while (spacing * scale < 10) spacing *= 5
+  while (spacing * scale > 200) spacing /= 5
+  gridSpacing = spacing
+
+  const alpha = Math.min(1, Math.max(0.05, (spacing * scale - 10) / 50))
+
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+
+  // Minor grid
+  ctx.strokeStyle = `rgba(30, 41, 59, ${alpha})`
+  ctx.lineWidth = 1
+  const sx0 = Math.floor(-ox / scale / spacing) * spacing
+  const sy0 = Math.floor(-oy / scale / spacing) * spacing
+  for (let wx = sx0; wx * scale + ox < w + spacing * scale; wx += spacing) {
+    const sx = Math.round(wx * scale + ox) + 0.5
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); ctx.stroke()
+  }
+  for (let wy = sy0; wy * scale + oy < h + spacing * scale; wy += spacing) {
+    const sy = Math.round(wy * scale + oy) + 0.5
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke()
+  }
+
+  // Major grid (every 5)
+  const ms = spacing * 5
+  const mx0 = Math.floor(-ox / scale / ms) * ms
+  const my0 = Math.floor(-oy / scale / ms) * ms
+  ctx.strokeStyle = `rgba(51, 65, 85, ${Math.min(1, alpha * 1.8)})`
+  for (let wx = mx0; wx * scale + ox < w + ms * scale; wx += ms) {
+    const sx = Math.round(wx * scale + ox) + 0.5
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); ctx.stroke()
+  }
+  for (let wy = my0; wy * scale + oy < h + ms * scale; wy += ms) {
+    const sy = Math.round(wy * scale + oy) + 0.5
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke()
+  }
+
+  // Axes
+  ctx.strokeStyle = 'rgba(100, 116, 139, 0.5)'
+  ctx.lineWidth = 1
+  if (ox >= 0 && ox <= w) {
+    ctx.beginPath(); ctx.moveTo(Math.round(ox)+0.5, 0); ctx.lineTo(Math.round(ox)+0.5, h); ctx.stroke()
+  }
+  if (oy >= 0 && oy <= h) {
+    ctx.beginPath(); ctx.moveTo(0, Math.round(oy)+0.5); ctx.lineTo(w, Math.round(oy)+0.5); ctx.stroke()
+  }
+
+  ctx.restore()
+}
+
+// ── Shape drawing ─────────────────────────────────────────────────────────────
+function drawShape(s, color, width, dashed) {
+  ctx.beginPath()
+  ctx.strokeStyle = color || '#e2e8f0'
+  ctx.lineWidth = (width || 1.5) / engineState.transform.scale
+  ctx.setLineDash(dashed ? [6 / engineState.transform.scale, 4 / engineState.transform.scale] : [])
+
+  if (s.type === 'line') {
+    ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2)
+  } else if (s.type === 'rect') {
+    ctx.rect(s.x, s.y, s.w, s.h)
+  } else if (s.type === 'circle') {
+    ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2)
+  } else if (s.type === 'polyline') {
+    if (s.points.length < 2) return
+    ctx.moveTo(s.points[0].x, s.points[0].y)
+    for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y)
+  }
+
+  ctx.stroke()
+  ctx.setLineDash([])
+}
+
+// ── Redraw ────────────────────────────────────────────────────────────────────
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  drawGrid()
+
+  const { x, y, scale } = engineState.transform
+  ctx.setTransform(scale, 0, 0, scale, x, y)
+
+  engineState.shapes.forEach((s, i) => {
+    drawShape(s, engineState.selected.has(i) ? '#38bdf8' : '#e2e8f0', engineState.selected.has(i) ? 2.5 : 1.5)
+  })
+
+  if (toolState.previewShape) {
+    drawShape(toolState.previewShape, '#facc15', 1.5, true)
+  }
+
+  // Draw polyline points
+  if (toolState.active === 'polyline' && toolState.polyPoints.length > 0) {
+    toolState.polyPoints.forEach(p => {
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 3 / scale, 0, Math.PI * 2)
+      ctx.fillStyle = '#facc15'
+      ctx.fill()
+    })
+  }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+}
+
+// ── Canvas & events ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas')
+const ctx = canvas.getContext('2d')
+
+function resize() {
+  canvas.width = window.innerWidth
+  canvas.height = window.innerHeight - document.getElementById('toolbar').offsetHeight
+  redraw()
+}
+window.addEventListener('resize', resize)
+resize()
+
+// Zoom
+canvas.addEventListener('wheel', e => {
+  e.preventDefault()
+  zoomAt(e.offsetX, e.offsetY, e.deltaY < 0 ? 1.12 : 1 / 1.12)
+  redraw()
+}, { passive: false })
+
+// Pan
+let panning = false, panLast = null, spaceDown = false
+window.addEventListener('keydown', e => { if (e.code === 'Space') { spaceDown = true; e.preventDefault() } })
+window.addEventListener('keyup',   e => { if (e.code === 'Space') spaceDown = false })
+
+canvas.addEventListener('mousedown', e => {
+  if (e.button === 1 || spaceDown) {
+    panning = true; panLast = { x: e.clientX, y: e.clientY }; e.preventDefault(); return
+  }
+  if (e.button !== 0) return
+
+  const raw = screenToWorld(e.offsetX, e.offsetY)
+  const wpt = snapToGrid(raw.x, raw.y)
+
+  if (toolState.active === 'select') {
+    let hit = false
+    for (let i = engineState.shapes.length - 1; i >= 0; i--) {
+      if (hitTest(engineState.shapes[i], wpt.x, wpt.y)) {
+        engineState.selected.clear(); engineState.selected.add(i); hit = true; break
+      }
+    }
+    if (!hit) engineState.selected.clear()
+    redraw(); return
+  }
+
+  if (toolState.active === 'polyline') {
+    if (!toolState.drawing) { toolState.drawing = true; toolState.polyPoints = [wpt] }
+    else { toolState.polyPoints.push(wpt) }
+    redraw(); return
+  }
+
+  toolState.drawing = true
+  toolState.startW = wpt
+})
+
+window.addEventListener('mousemove', e => {
+  if (panning) {
+    engineState.transform.x += e.clientX - panLast.x
+    engineState.transform.y += e.clientY - panLast.y
+    panLast = { x: e.clientX, y: e.clientY }
+    redraw(); return
+  }
+
+  const rect = canvas.getBoundingClientRect()
+  const ox = e.clientX - rect.left, oy = e.clientY - rect.top
+  const raw = screenToWorld(ox, oy)
+  const wpt = snapToGrid(raw.x, raw.y)
+
+  document.getElementById('coords').textContent = `X: ${wpt.x.toFixed(1)}  Y: ${(-wpt.y).toFixed(1)}`
+
+  if (!toolState.drawing) { toolState.previewShape = null; return }
+
+  if (toolState.active === 'polyline') {
+    if (toolState.polyPoints.length > 0) {
+      toolState.previewShape = { type: 'polyline', points: [...toolState.polyPoints, wpt] }
+      redraw()
+    }
+    return
+  }
+
+  const s = toolState.startW
+  if (!s) return
+
+  if (toolState.active === 'line') toolState.previewShape = { type: 'line', x1: s.x, y1: s.y, x2: wpt.x, y2: wpt.y }
+  else if (toolState.active === 'rect') toolState.previewShape = { type: 'rect', x: s.x, y: s.y, w: wpt.x - s.x, h: wpt.y - s.y }
+  else if (toolState.active === 'circle') toolState.previewShape = { type: 'circle', x: s.x, y: s.y, r: Math.hypot(wpt.x - s.x, wpt.y - s.y) }
+  redraw()
+})
+
+window.addEventListener('mouseup', e => {
+  if (e.button === 1 || panning) { panning = false; return }
+  if (e.button !== 0 || !toolState.drawing) return
+  if (toolState.active === 'polyline' || toolState.active === 'select') return
+
+  const rect = canvas.getBoundingClientRect()
+  const raw = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+  const wpt = snapToGrid(raw.x, raw.y)
+  const s = toolState.startW
+
+  saveState()
+  if (toolState.active === 'line') {
+    engineState.shapes.push({ type: 'line', x1: s.x, y1: s.y, x2: wpt.x, y2: wpt.y })
+  } else if (toolState.active === 'rect') {
+    engineState.shapes.push({ type: 'rect', x: s.x, y: s.y, w: wpt.x - s.x, h: wpt.y - s.y })
+  } else if (toolState.active === 'circle') {
+    const r = Math.hypot(wpt.x - s.x, wpt.y - s.y)
+    if (r > 0) engineState.shapes.push({ type: 'circle', x: s.x, y: s.y, r })
+  }
+
+  toolState.drawing = false; toolState.previewShape = null; toolState.startW = null
+  redraw()
+})
+
+canvas.addEventListener('dblclick', e => {
+  if (toolState.active !== 'polyline' || !toolState.drawing) return
+  if (toolState.polyPoints.length >= 2) {
+    saveState()
+    engineState.shapes.push({ type: 'polyline', points: [...toolState.polyPoints] })
+  }
+  toolState.drawing = false; toolState.previewShape = null; toolState.polyPoints = []
+  redraw()
+})
+
+// Keyboard
+window.addEventListener('keydown', e => {
+  const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select' }
+  if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
+
+  if (e.key === 'Escape') {
+    toolState.drawing = false; toolState.previewShape = null; toolState.polyPoints = []; redraw()
+  }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && toolState.active === 'select') {
+    saveState()
+    engineState.shapes = engineState.shapes.filter((_, i) => !engineState.selected.has(i))
+    engineState.selected.clear(); redraw()
+  }
+  if (e.key === 'F9') {
+    toolState.snapEnabled = !toolState.snapEnabled
+    document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
+    document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); doUndo() }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); doRedo() }
+})
+
+// Toolbar buttons
+document.querySelectorAll('[data-tool]').forEach(btn => {
+  btn.addEventListener('click', () => setTool(btn.dataset.tool))
+})
+document.getElementById('undoBtn').addEventListener('click', doUndo)
+document.getElementById('redoBtn').addEventListener('click', doRedo)
+document.getElementById('clearBtn').addEventListener('click', () => {
+  saveState(); engineState.shapes = []; engineState.selected.clear(); redraw()
+})
+document.getElementById('snapBtn').addEventListener('click', () => {
+  toolState.snapEnabled = !toolState.snapEnabled
+  document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
+  document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
+})
+document.getElementById('saveDXF').addEventListener('click', () => {
+  let dxf = '0\nSECTION\n2\nENTITIES\n'
+  engineState.shapes.forEach(s => {
+    if (s.type === 'line') {
+      dxf += `0\nLINE\n8\n0\n10\n${s.x1}\n20\n${-s.y1}\n30\n0\n11\n${s.x2}\n21\n${-s.y2}\n31\n0\n`
+    } else if (s.type === 'rect') {
+      const x1=s.x,y1=s.y,x2=s.x+s.w,y2=s.y+s.h
+      dxf += `0\nLWPOLYLINE\n8\n0\n90\n4\n70\n1\n10\n${x1}\n20\n${-y1}\n10\n${x2}\n20\n${-y1}\n10\n${x2}\n20\n${-y2}\n10\n${x1}\n20\n${-y2}\n`
+    } else if (s.type === 'circle') {
+      dxf += `0\nCIRCLE\n8\n0\n10\n${s.x}\n20\n${-s.y}\n30\n0\n40\n${s.r}\n`
+    } else if (s.type === 'polyline') {
+      dxf += `0\nLWPOLYLINE\n8\n0\n90\n${s.points.length}\n70\n0\n`
+      s.points.forEach(p => { dxf += `10\n${p.x}\n20\n${-p.y}\n` })
+    }
+  })
+  dxf += '0\nENDSEC\n0\nEOF\n'
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([dxf], { type: 'application/octet-stream' }))
+  a.download = 'drawing.dxf'; a.click()
+})
+
+redraw()
+</script>
+</body>
+</html>
