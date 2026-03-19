@@ -230,6 +230,8 @@ canvas {
   <button data-tool="polyline" title="Polyline (P)">&#9651; Poly</button>
   <button data-tool="trim"     title="Trim (T)">&#9988; Trim</button>
   <button data-tool="extend"   title="Extend (E)">&#8614; Extend</button>
+  <button data-tool="offset"   title="Offset (O)">&#8644; Offset</button>
+  <button data-tool="chamfer"  title="Chamfer (F)">&#9189; Chamfer</button>
   <div class="sep"></div>
   <button id="undoBtn" title="Undo (Ctrl+Z)">&#8617; Undo</button>
   <button id="redoBtn" title="Redo (Ctrl+Y)">&#8618; Redo</button>
@@ -239,6 +241,10 @@ canvas {
   <button id="printBtn">&#128438; PDF&#21360;&#21029;</button>
   <div class="spacer"></div>
   <button id="dimBtn">&#128207; &#23546;&#27861;: OFF</button>
+  <div class="sep"></div>
+  <span class="grid-label" id="offsetLabel" style="display:none">&#36317;&#31163;:</span>
+  <input id="offsetInput" type="number" value="20" min="0.1" step="any"
+         style="display:none;width:58px" class="grid-label" title="Offset/Chamfer &#36317;&#31163;">
   <div class="sep"></div>
   <span class="grid-label">&#26684;&#23376;:</span>
   <input id="gridInput" type="number" value="50" min="1" max="10000" step="1" title="&#26684;&#23376;&#12398;&#22522;&#672C;&#12469;&#12452;&#12474;">
@@ -608,6 +614,72 @@ function doExtend(shapeIdx, clickT) {
   updatePropsPanel()
 }
 
+// ── Offset tool ──────────────────────────────────────────────────────────────
+let offsetPreview = null
+let offsetDist = 20   // default offset distance (world units)
+
+function computeOffsetShape(s, wx, wy) {
+  if (s.type === 'line') {
+    const dx=s.x2-s.x1, dy=s.y2-s.y1, len=Math.hypot(dx,dy)
+    if (len < 1e-10) return null
+    const nx=-dy/len, ny=dx/len   // unit normal (left side)
+    // Determine side from cursor
+    const side = (wx-s.x1)*nx + (wy-s.y1)*ny >= 0 ? 1 : -1
+    const d = offsetDist * side
+    return {type:'line', x1:s.x1+nx*d, y1:s.y1+ny*d, x2:s.x2+nx*d, y2:s.y2+ny*d}
+  }
+  if (s.type === 'circle') {
+    const d = Math.hypot(wx-s.x, wy-s.y) >= s.r ? offsetDist : -offsetDist
+    const nr = s.r + d
+    if (nr <= 0) return null
+    return {type:'circle', x:s.x, y:s.y, r:nr}
+  }
+  if (s.type === 'rect') {
+    const cx=s.x+s.w/2, cy=s.y+s.h/2
+    const side = (wx-cx)*(s.w>=0?1:-1) >= 0 || (wy-cy)*(s.h>=0?1:-1) >= 0 ? 1 : -1
+    const d = offsetDist * side
+    const sw=s.w>=0?1:-1, sh=s.h>=0?1:-1
+    return {type:'rect', x:s.x-sw*d, y:s.y-sh*d,
+            w:s.w+2*sw*d, h:s.h+2*sh*d}
+  }
+  return null
+}
+
+// ── Chamfer tool ──────────────────────────────────────────────────────────────
+let chamferPreview = null
+let chamferDist = 20   // chamfer distance from corner
+let chamferSel = null  // first selected line index
+
+// Find intersection point of two INFINITE lines (segments extended)
+function lineLinePoint(s1, s2) {
+  const ax=s1.x1,ay=s1.y1,bx=s1.x2,by=s1.y2
+  const cx=s2.x1,cy=s2.y1,dx=s2.x2,dy=s2.y2
+  const ex=bx-ax,ey=by-ay,fx=dx-cx,fy=dy-cy
+  const denom=ex*fy-ey*fx
+  if (Math.abs(denom)<1e-10) return null
+  const t=((cx-ax)*fy-(cy-ay)*fx)/denom
+  return {x:ax+t*ex, y:ay+t*ey, t}
+}
+
+function computeChamfer(s1, s2) {
+  const ip = lineLinePoint(s1, s2)
+  if (!ip) return null
+  const d = chamferDist
+  // Point at distance d from intersection along each line direction
+  function ptAlongLine(s, ip, dist) {
+    const dx=s.x2-s.x1, dy=s.y2-s.y1, len=Math.hypot(dx,dy)
+    if (len<1e-10) return null
+    // Direction away from intersection
+    const dot = (s.x2-ip.x)*(dx/len)+(s.y2-ip.y)*(dy/len)
+    const dir = dot >= 0 ? 1 : -1
+    return {x:ip.x+(dx/len)*dist*dir, y:ip.y+(dy/len)*dist*dir}
+  }
+  const p1 = ptAlongLine(s1, ip, d)
+  const p2 = ptAlongLine(s2, ip, d)
+  if (!p1||!p2) return null
+  return {ip, p1, p2}
+}
+
 // ── Properties panel ─────────────────────────────────────────────────────────
 function getSelectedIdx() {
   if (engineState.selected.size !== 1) return -1
@@ -833,6 +905,12 @@ function setTool(name) {
   toolState.polyPoints = []
   trimPreview = null
   extendPreview = null
+  offsetPreview = null
+  chamferPreview = null
+  chamferSel = null
+  const needsDist = ['offset','chamfer'].includes(name)
+  document.getElementById('offsetLabel').style.display = needsDist ? '' : 'none'
+  document.getElementById('offsetInput').style.display = needsDist ? '' : 'none'
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
   redraw()
   updatePropsPanel()
@@ -962,6 +1040,18 @@ function redraw() {
     drawDimAnnotation(toolState.previewShape, '#facc15')
   }
 
+  // Offset preview
+  if (offsetPreview) drawShape(offsetPreview, '#a78bfa', 1.5, true)
+
+  // Chamfer preview
+  if (chamferPreview) {
+    drawShape({type:'line', x1:chamferPreview.p1.x, y1:chamferPreview.p1.y,
+                            x2:chamferPreview.p2.x, y2:chamferPreview.p2.y}, '#fb923c', 2, false)
+    // Highlight first selected line if any
+    if (chamferSel !== null)
+      drawShape(engineState.shapes[chamferSel], '#fb923c', 2.5, false)
+  }
+
   // Extend preview: cyan dashed line + snap dot
   if (extendPreview) {
     drawShape({type:'line',x1:extendPreview.fromX,y1:extendPreview.fromY,
@@ -1040,6 +1130,53 @@ canvas.addEventListener('mousedown', e => {
   const raw = screenToWorld(e.offsetX, e.offsetY)
   const wpt = snapToGrid(raw.x, raw.y)
 
+  if (toolState.active === 'offset') {
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      const s = engineState.shapes[i]
+      if (hitTest(s, raw.x, raw.y)) {
+        const ns = computeOffsetShape(s, raw.x, raw.y)
+        if (ns) { saveState(); engineState.shapes.push(ns); redraw() }
+        break
+      }
+    }
+    return
+  }
+
+  if (toolState.active === 'chamfer') {
+    let hit = -1
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      if (engineState.shapes[i].type==='line' && hitTest(engineState.shapes[i], raw.x, raw.y)) { hit=i; break }
+    }
+    if (hit < 0) { chamferSel=null; chamferPreview=null; redraw(); return }
+    if (chamferSel === null) {
+      chamferSel = hit   // first line selected
+      redraw()
+    } else if (chamferSel !== hit) {
+      const s1=engineState.shapes[chamferSel], s2=engineState.shapes[hit]
+      const ch = computeChamfer(s1, s2)
+      if (ch) {
+        saveState()
+        // Trim each line back to the chamfer point
+        function trimLineTo(s, pt) {
+          const dx=s.x2-s.x1,dy=s.y2-s.y1,len2=dx*dx+dy*dy
+          if (len2<1e-10) return
+          const t=((pt.x-s.x1)*dx+(pt.y-s.y1)*dy)/len2
+          const lerp=u=>({x:s.x1+u*dx,y:s.y1+u*dy})
+          const ip=lerp(t)
+          // Keep the farther half (away from intersection)
+          const dc1=Math.hypot(s.x1-ch.ip.x,s.y1-ch.ip.y)
+          const dc2=Math.hypot(s.x2-ch.ip.x,s.y2-ch.ip.y)
+          if (dc1>dc2) { s.x2=ip.x; s.y2=ip.y } else { s.x1=ip.x; s.y1=ip.y }
+        }
+        trimLineTo(engineState.shapes[chamferSel], ch.p1)
+        trimLineTo(engineState.shapes[hit], ch.p2)
+        engineState.shapes.push({type:'line',x1:ch.p1.x,y1:ch.p1.y,x2:ch.p2.x,y2:ch.p2.y})
+      }
+      chamferSel=null; chamferPreview=null; redraw()
+    }
+    return
+  }
+
   if (toolState.active === 'trim' || toolState.active === 'extend') {
     for (let i=engineState.shapes.length-1; i>=0; i--) {
       const s = engineState.shapes[i]
@@ -1095,6 +1232,31 @@ window.addEventListener('mousemove', e => {
   const wpt = snapToGrid(raw.x, raw.y)
 
   document.getElementById('coords').textContent = `X: ${wpt.x.toFixed(1)}  Y: ${(-wpt.y).toFixed(1)}`
+
+  // Offset hover preview
+  if (toolState.active === 'offset') {
+    offsetPreview = null
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      const s = engineState.shapes[i]
+      if (hitTest(s, raw.x, raw.y)) { offsetPreview = computeOffsetShape(s, raw.x, raw.y); break }
+    }
+    redraw(); return
+  }
+
+  // Chamfer hover preview
+  if (toolState.active === 'chamfer') {
+    chamferPreview = null
+    if (chamferSel !== null) {
+      for (let i=engineState.shapes.length-1; i>=0; i--) {
+        const s = engineState.shapes[i]
+        if (i!==chamferSel && s.type==='line' && hitTest(s, raw.x, raw.y)) {
+          chamferPreview = computeChamfer(engineState.shapes[chamferSel], s)
+          break
+        }
+      }
+    }
+    redraw(); return
+  }
 
   // Extend: hover preview
   if (toolState.active === 'extend') {
@@ -1203,7 +1365,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select', t: 'trim', e: 'extend' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', t:'trim', e:'extend', o:'offset', f:'chamfer' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
@@ -1238,6 +1400,13 @@ document.getElementById('snapBtn').addEventListener('click', () => {
   document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
   document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
 })
+document.getElementById('offsetInput').addEventListener('change', e => {
+  const v = parseFloat(e.target.value)
+  if (!isNaN(v) && v > 0) { offsetDist = v; chamferDist = v }
+  else e.target.value = offsetDist
+})
+document.getElementById('offsetInput').addEventListener('keydown', e => e.stopPropagation())
+
 document.getElementById('gridInput').addEventListener('change', e => {
   const v = parseFloat(e.target.value)
   if (!isNaN(v) && v >= 1) { baseGridSpacing = v; redraw() }
