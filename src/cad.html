@@ -108,6 +108,40 @@ canvas {
 }
 
 #print-img { display: none; }
+
+#dim-bar {
+  display: none;
+  position: fixed;
+  bottom: 36px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.97);
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 6px 14px;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  z-index: 10;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+#dim-bar.visible { display: flex; }
+#dim-bar-label { color: #94a3b8; }
+#dim-input {
+  background: #0f172a;
+  border: 1px solid #38bdf8;
+  color: #38bdf8;
+  padding: 3px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  width: 160px;
+  border-radius: 2px;
+  outline: none;
+}
+#dim-input:focus { border-color: #7dd3fc; box-shadow: 0 0 0 2px rgba(56,189,248,0.2); }
+#dim-bar-current { color: #64748b; min-width: 130px; font-size: 11px; }
+#dim-bar-hint { color: #475569; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -128,12 +162,20 @@ canvas {
   <button id="saveDXF">&#8659; DXF</button>
   <button id="printBtn">&#128438; PDF&#21360;&#21029;</button>
   <div class="spacer"></div>
+  <button id="dimBtn">&#128207; &#23546;&#27861;: OFF</button>
   <button id="snapBtn" class="active">Snap: ON</button>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
 <canvas id="canvas"></canvas>
 <img id="print-img" alt="WebCAD Print">
+
+<div id="dim-bar">
+  <span id="dim-bar-label">&#38263;&#12373;[,&#35282;&#24230;&#176;]:</span>
+  <input id="dim-input" type="text" autocomplete="off" spellcheck="false" placeholder="&#20363;: 200 &#12414;&#12383;&#12399; 200,45">
+  <span id="dim-bar-current"></span>
+  <span id="dim-bar-hint">Enter=&#30906;&#23450; &nbsp; Esc=&#12461;&#12515;&#12531;&#12475;&#12523;</span>
+</div>
 
 <div id="hint">
   <b>Shortcuts:</b>
@@ -224,6 +266,170 @@ const toolState = {
   previewShape: null,
   polyPoints: [],
   snapEnabled: true,
+}
+
+// ── Dimension state ───────────────────────────────────────────────────────────
+let showDims = false
+
+// Labels for dim bar per tool
+const DIM_LABELS = {
+  line:   '長さ[,角度°]:',
+  rect:   '幅,高さ:',
+  circle: '半径:',
+}
+// Placeholder hints per tool
+const DIM_PLACEHOLDERS = {
+  line:   '例: 200 または 200,45',
+  rect:   '例: 200,150',
+  circle: '例: 100',
+}
+
+function showDimBar(tool) {
+  const bar = document.getElementById('dim-bar')
+  document.getElementById('dim-bar-label').textContent = DIM_LABELS[tool] || ''
+  document.getElementById('dim-input').placeholder = DIM_PLACEHOLDERS[tool] || ''
+  document.getElementById('dim-input').value = ''
+  document.getElementById('dim-bar-current').textContent = ''
+  bar.classList.add('visible')
+  // Slight delay so the mousedown click doesn't immediately blur
+  setTimeout(() => document.getElementById('dim-input').focus(), 50)
+}
+
+function hideDimBar() {
+  document.getElementById('dim-bar').classList.remove('visible')
+  document.getElementById('dim-input').value = ''
+  document.getElementById('dim-bar-current').textContent = ''
+}
+
+function updateDimBarCurrent(shape) {
+  const el = document.getElementById('dim-bar-current')
+  if (!shape) { el.textContent = ''; return }
+  if (shape.type === 'line') {
+    const len = Math.hypot(shape.x2 - shape.x1, shape.y2 - shape.y1)
+    const deg = Math.atan2(-(shape.y2 - shape.y1), shape.x2 - shape.x1) * 180 / Math.PI
+    el.textContent = `L=${len.toFixed(1)}  ∠${deg.toFixed(1)}°`
+  } else if (shape.type === 'rect') {
+    el.textContent = `W=${Math.abs(shape.w).toFixed(1)}  H=${Math.abs(shape.h).toFixed(1)}`
+  } else if (shape.type === 'circle') {
+    el.textContent = `R=${shape.r.toFixed(1)}  ⌀${(shape.r * 2).toFixed(1)}`
+  }
+}
+
+// Parse the dimension input text into a shape object
+function parseDimInput(text) {
+  const parts = text.trim().split(/[\s,]+/).map(Number)
+  const tool = toolState.active
+  const s = toolState.startW
+  if (!s) return null
+
+  if (tool === 'line') {
+    const len = parts[0]
+    if (isNaN(len) || len <= 0) return null
+    let deg = (parts.length > 1 && !isNaN(parts[1])) ? parts[1] : null
+    if (deg === null) {
+      // Use angle from current preview, or 0°
+      if (toolState.previewShape?.type === 'line') {
+        deg = Math.atan2(-(toolState.previewShape.y2 - toolState.previewShape.y1),
+                           toolState.previewShape.x2 - toolState.previewShape.x1) * 180 / Math.PI
+      } else { deg = 0 }
+    }
+    const rad = deg * Math.PI / 180
+    return { type: 'line', x1: s.x, y1: s.y,
+             x2: s.x + len * Math.cos(rad),
+             y2: s.y - len * Math.sin(rad) }   // -sin: canvas Y is flipped
+  }
+  if (tool === 'rect') {
+    const w = parts[0]
+    const h = parts.length > 1 && !isNaN(parts[1]) ? parts[1] : parts[0]
+    if (isNaN(w) || isNaN(h) || w === 0 || h === 0) return null
+    return { type: 'rect', x: s.x, y: s.y, w, h }
+  }
+  if (tool === 'circle') {
+    const r = parts[0]
+    if (isNaN(r) || r <= 0) return null
+    return { type: 'circle', x: s.x, y: s.y, r }
+  }
+  return null
+}
+
+function commitDimInput() {
+  const text = document.getElementById('dim-input').value.trim()
+  let shape = text ? parseDimInput(text) : toolState.previewShape
+  if (shape) {
+    saveState()
+    engineState.shapes.push(shape)
+  }
+  toolState.drawing = false
+  toolState.previewShape = null
+  toolState.startW = null
+  hideDimBar()
+  redraw()
+}
+
+// ── Dimension annotation drawing ──────────────────────────────────────────────
+function drawDimAnnotation(s, color) {
+  const scale = engineState.transform.scale
+  const fs = 11 / scale   // font size in world units → constant ~11px on screen
+
+  ctx.save()
+  ctx.font = `${fs}px Consolas, monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  function labelAt(wx, wy, text) {
+    const m = ctx.measureText(text)
+    const pw = m.width + 6 / scale, ph = fs * 1.6
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.82)'
+    ctx.fillRect(wx - pw / 2, wy - ph / 2, pw, ph)
+    ctx.fillStyle = color
+    ctx.fillText(text, wx, wy)
+  }
+
+  if (s.type === 'line') {
+    const len = Math.hypot(s.x2 - s.x1, s.y2 - s.y1)
+    if (len < 1e-6) { ctx.restore(); return }
+    const ang = Math.atan2(s.y2 - s.y1, s.x2 - s.x1)
+    const deg = Math.atan2(-(s.y2 - s.y1), s.x2 - s.x1) * 180 / Math.PI
+    const mx = (s.x1 + s.x2) / 2, my = (s.y1 + s.y2) / 2
+    const px = -Math.sin(ang) * 18 / scale
+    const py =  Math.cos(ang) * 18 / scale
+    labelAt(mx + px, my + py, `${len.toFixed(1)}`)
+    // Show angle only when meaningfully non-horizontal
+    if (Math.abs(deg % 180) > 1) {
+      labelAt(mx + px * 2.2, my + py * 2.2, `∠${deg.toFixed(1)}°`)
+    }
+
+  } else if (s.type === 'rect') {
+    const w = Math.abs(s.w), h = Math.abs(s.h)
+    if (w < 1e-6 || h < 1e-6) { ctx.restore(); return }
+    // Width label: centered below the bottom edge
+    const bx = s.x + s.w / 2
+    const by = s.y + (s.h >= 0 ? s.h : 0) + 16 / scale
+    labelAt(bx, by, `W: ${w.toFixed(1)}`)
+    // Height label: to the right, rotated 90°
+    const rx = s.x + (s.w >= 0 ? s.w : 0) + 16 / scale
+    const ry = s.y + s.h / 2
+    ctx.save()
+    ctx.translate(rx, ry)
+    ctx.rotate(Math.PI / 2)
+    labelAt(0, 0, `H: ${h.toFixed(1)}`)
+    ctx.restore()
+
+  } else if (s.type === 'circle') {
+    if (s.r < 1e-6) { ctx.restore(); return }
+    labelAt(s.x, s.y - s.r - 16 / scale, `R: ${s.r.toFixed(1)}`)
+    labelAt(s.x, s.y - s.r - 16 / scale - fs * 1.8, `⌀${(s.r * 2).toFixed(1)}`)
+
+  } else if (s.type === 'polyline' && s.points.length >= 2) {
+    let total = 0
+    for (let i = 0; i < s.points.length - 1; i++) {
+      total += Math.hypot(s.points[i+1].x - s.points[i].x,
+                          s.points[i+1].y - s.points[i].y)
+    }
+    labelAt(s.points[0].x, s.points[0].y - 18 / scale, `L: ${total.toFixed(1)}`)
+  }
+
+  ctx.restore()
 }
 
 function snapToGrid(x, y) {
@@ -330,11 +536,14 @@ function redraw() {
   ctx.setTransform(scale, 0, 0, scale, x, y)
 
   engineState.shapes.forEach((s, i) => {
-    drawShape(s, engineState.selected.has(i) ? '#38bdf8' : '#e2e8f0', engineState.selected.has(i) ? 2.5 : 1.5)
+    const sel = engineState.selected.has(i)
+    drawShape(s, sel ? '#38bdf8' : '#e2e8f0', sel ? 2.5 : 1.5)
+    if (sel || showDims) drawDimAnnotation(s, sel ? '#34d399' : '#94a3b8')
   })
 
   if (toolState.previewShape) {
     drawShape(toolState.previewShape, '#facc15', 1.5, true)
+    drawDimAnnotation(toolState.previewShape, '#facc15')
   }
 
   // Draw polyline points
@@ -402,6 +611,9 @@ canvas.addEventListener('mousedown', e => {
 
   toolState.drawing = true
   toolState.startW = wpt
+  if (['line', 'rect', 'circle'].includes(toolState.active)) {
+    showDimBar(toolState.active)
+  }
 })
 
 window.addEventListener('mousemove', e => {
@@ -435,6 +647,7 @@ window.addEventListener('mousemove', e => {
   if (toolState.active === 'line') toolState.previewShape = { type: 'line', x1: s.x, y1: s.y, x2: wpt.x, y2: wpt.y }
   else if (toolState.active === 'rect') toolState.previewShape = { type: 'rect', x: s.x, y: s.y, w: wpt.x - s.x, h: wpt.y - s.y }
   else if (toolState.active === 'circle') toolState.previewShape = { type: 'circle', x: s.x, y: s.y, r: Math.hypot(wpt.x - s.x, wpt.y - s.y) }
+  updateDimBarCurrent(toolState.previewShape)
   redraw()
 })
 
@@ -459,6 +672,7 @@ window.addEventListener('mouseup', e => {
   }
 
   toolState.drawing = false; toolState.previewShape = null; toolState.startW = null
+  hideDimBar()
   redraw()
 })
 
@@ -474,11 +688,23 @@ canvas.addEventListener('dblclick', e => {
 
 // Keyboard
 window.addEventListener('keydown', e => {
+  // While typing in the dim input, only handle Enter / Escape here
+  if (document.activeElement === document.getElementById('dim-input')) {
+    if (e.key === 'Enter') { e.preventDefault(); commitDimInput() }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      toolState.drawing = false; toolState.previewShape = null; toolState.startW = null
+      hideDimBar(); redraw()
+    }
+    return
+  }
+
   const toolMap = { l: 'line', r: 'rect', c: 'circle', p: 'polyline', s: 'select' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
-    toolState.drawing = false; toolState.previewShape = null; toolState.polyPoints = []; redraw()
+    toolState.drawing = false; toolState.previewShape = null; toolState.polyPoints = []
+    hideDimBar(); redraw()
   }
   if ((e.key === 'Delete' || e.key === 'Backspace') && toolState.active === 'select') {
     saveState()
@@ -507,6 +733,12 @@ document.getElementById('snapBtn').addEventListener('click', () => {
   toolState.snapEnabled = !toolState.snapEnabled
   document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
   document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
+})
+document.getElementById('dimBtn').addEventListener('click', () => {
+  showDims = !showDims
+  document.getElementById('dimBtn').textContent = `📐 寸法: ${showDims ? 'ON' : 'OFF'}`
+  document.getElementById('dimBtn').classList.toggle('active', showDims)
+  redraw()
 })
 document.getElementById('printBtn').addEventListener('click', () => {
   // Hide preview while capturing
