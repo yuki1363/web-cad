@@ -302,6 +302,7 @@ canvas {
   <input id="gridInput" type="number" value="50" min="1" max="10000" step="1"
          title="&#26684;&#23376;&#12398;&#22522;&#26412;&#12469;&#12452;&#12474;">
   <button id="snapBtn">Snap: OFF</button>
+  <button id="orthoBtn">Ortho: OFF</button>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
@@ -324,6 +325,7 @@ canvas {
       <button data-tool="select"   title="Select (S)">&#9654; Sel</button>
       <button data-tool="move"     title="Move (M)">&#8680; Move</button>
       <button data-tool="copy"     title="Copy (Y)">&#9107; Copy</button>
+      <button data-tool="rotate"   title="Rotate (V)">&#8635; Rot</button>
       <button data-tool="scale"    title="Scale (Z)">&#8693; Scale</button>
       <button data-tool="mirror"   title="Mirror (X)">&#8596; Mirror</button>
     </div>
@@ -367,7 +369,7 @@ canvas {
   <b>Shortcuts:</b>
   L=Line&nbsp; R=Rect&nbsp; C=Circle&nbsp; P=Polyline&nbsp; S=Select
   | Scroll=Pan&nbsp; Shift+Scroll=横Pan&nbsp; Ctrl+Scroll=Zoom&nbsp; 右クリック/Space+drag=Pan
-  | F9=Snap切替&nbsp; Alt=Snap一時切替&nbsp; Del=Delete&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
+  | F8=Ortho切替&nbsp; F9=Snap切替&nbsp; Alt=Snap一時切替&nbsp; Del=Delete&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
 </div>
 
 <script>
@@ -919,6 +921,42 @@ function selectionCenter(idxSet) {
   return {x:(minX+maxX)/2, y:(minY+maxY)/2}
 }
 
+// ── Rotate tool ───────────────────────────────────────────────────────────────
+let rotateState = null  // {cx,cy, refAngle, origShapes:Map<idx,shapeCopy>} | phase0 = awaiting center click
+
+function rotatePoint(px, py, cx, cy, angle) {
+  const cos = Math.cos(angle), sin = Math.sin(angle)
+  const dx = px - cx, dy = py - cy
+  return { x: cx + dx*cos - dy*sin, y: cy + dx*sin + dy*cos }
+}
+
+function rotateShapeFromOrig(s, orig, cx, cy, angle) {
+  function rp(x, y) { return rotatePoint(x, y, cx, cy, angle) }
+  if (s.type === 'line') {
+    const a=rp(orig.x1,orig.y1), b=rp(orig.x2,orig.y2)
+    s.x1=a.x; s.y1=a.y; s.x2=b.x; s.y2=b.y
+  } else if (s.type === 'rect') {
+    // Convert rect → polyline (closed) when rotated
+    const corners = [
+      rp(orig.x, orig.y), rp(orig.x+orig.w, orig.y),
+      rp(orig.x+orig.w, orig.y+orig.h), rp(orig.x, orig.y+orig.h),
+      rp(orig.x, orig.y)
+    ]
+    s.type = 'polyline'; s.points = corners
+    delete s.x; delete s.y; delete s.w; delete s.h
+  } else if (s.type === 'circle') {
+    const c = rp(orig.x, orig.y); s.x=c.x; s.y=c.y
+  } else if (s.type === 'arc') {
+    const c = rp(orig.x, orig.y); s.x=c.x; s.y=c.y
+    s.startAngle = orig.startAngle + angle
+    s.endAngle   = orig.endAngle   + angle
+  } else if (s.type === 'text') {
+    const c = rp(orig.x, orig.y); s.x=c.x; s.y=c.y
+  } else if (s.type === 'polyline') {
+    s.points.forEach((p,i) => { const r=rp(orig.points[i].x,orig.points[i].y); p.x=r.x; p.y=r.y })
+  }
+}
+
 // ── Mirror tool ───────────────────────────────────────────────────────────────
 let mirrorState = null  // {p1:{x,y}, p2:{x,y}|null, origShapes:Map<idx,shapeCopy>}
 
@@ -1246,6 +1284,13 @@ function drawDimAnnotation(s, color) {
 }
 
 let altDown = false   // Alt キーで一時的にスナップを反転
+let orthoMode = false  // Ortho モード (F8)
+
+function orthoConstrain(baseX, baseY, x, y) {
+  if (!orthoMode) return { x, y }
+  const dx = Math.abs(x - baseX), dy = Math.abs(y - baseY)
+  return dx >= dy ? { x, y: baseY } : { x: baseX, y }
+}
 
 function snapToGrid(x, y) {
   const snap = altDown ? !toolState.snapEnabled : toolState.snapEnabled
@@ -1269,6 +1314,7 @@ function setTool(name) {
   copyState = null
   scaleState = null
   mirrorState = null
+  rotateState = null
   // Hide floating text input when switching tools
   document.getElementById('textInputWrap').style.display = 'none'
   textState = null
@@ -1584,6 +1630,30 @@ canvas.addEventListener('mousedown', e => {
     return
   }
 
+  if (toolState.active === 'rotate') {
+    let hit = -1
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      if (hitTest(engineState.shapes[i], raw.x, raw.y)) { hit=i; break }
+    }
+    if (!rotateState) {
+      // Phase 0: select shape (if not already selected), then set center on next click
+      if (hit >= 0 && !engineState.selected.has(hit)) {
+        engineState.selected.clear(); engineState.selected.add(hit); updatePropsPanel()
+      }
+      if (engineState.selected.size === 0) { redraw(); return }
+      // This click sets the rotation center
+      saveState()
+      const origShapes = new Map()
+      engineState.selected.forEach(idx => origShapes.set(idx, JSON.parse(JSON.stringify(engineState.shapes[idx]))))
+      rotateState = { cx: raw.x, cy: raw.y, refAngle: Math.atan2(raw.y - raw.y, raw.x - raw.x), angle: 0, origShapes }
+      redraw(); return
+    } else {
+      // Phase 1: confirm rotation on click
+      rotateState = null
+      redraw(); return
+    }
+  }
+
   if (toolState.active === 'mirror') {
     let hit = -1
     for (let i=engineState.shapes.length-1; i>=0; i--) {
@@ -1717,7 +1787,10 @@ canvas.addEventListener('mousedown', e => {
 
   if (toolState.active === 'polyline') {
     if (!toolState.drawing) { toolState.drawing = true; toolState.polyPoints = [wpt] }
-    else { toolState.polyPoints.push(wpt) }
+    else {
+      const base = toolState.polyPoints[toolState.polyPoints.length - 1]
+      toolState.polyPoints.push(orthoConstrain(base.x, base.y, wpt.x, wpt.y))
+    }
     redraw(); return
   }
 
@@ -1750,6 +1823,16 @@ window.addEventListener('mousemove', e => {
       const s = engineState.shapes[i]
       if (hitTest(s, raw.x, raw.y)) { offsetPreview = computeOffsetShape(s, raw.x, raw.y); break }
     }
+    redraw(); return
+  }
+
+  // Rotate drag
+  if (toolState.active === 'rotate' && rotateState) {
+    const angle = Math.atan2(wpt.y - rotateState.cy, wpt.x - rotateState.cx)
+    rotateState.angle = angle
+    rotateState.origShapes.forEach((orig, idx) => {
+      rotateShapeFromOrig(engineState.shapes[idx], orig, rotateState.cx, rotateState.cy, angle)
+    })
     redraw(); return
   }
 
@@ -1868,7 +1951,9 @@ window.addEventListener('mousemove', e => {
 
   if (toolState.active === 'polyline') {
     if (toolState.polyPoints.length > 0) {
-      toolState.previewShape = { type: 'polyline', points: [...toolState.polyPoints, wpt] }
+      const base = toolState.polyPoints[toolState.polyPoints.length - 1]
+      const cp = orthoConstrain(base.x, base.y, wpt.x, wpt.y)
+      toolState.previewShape = { type: 'polyline', points: [...toolState.polyPoints, cp] }
       redraw()
     }
     return
@@ -1877,9 +1962,10 @@ window.addEventListener('mousemove', e => {
   const s = toolState.startW
   if (!s) return
 
-  if (toolState.active === 'line') toolState.previewShape = { type: 'line', x1: s.x, y1: s.y, x2: wpt.x, y2: wpt.y }
-  else if (toolState.active === 'rect') toolState.previewShape = { type: 'rect', x: s.x, y: s.y, w: wpt.x - s.x, h: wpt.y - s.y }
-  else if (toolState.active === 'circle') toolState.previewShape = { type: 'circle', x: s.x, y: s.y, r: Math.hypot(wpt.x - s.x, wpt.y - s.y) }
+  const oc = orthoConstrain(s.x, s.y, wpt.x, wpt.y)
+  if (toolState.active === 'line') toolState.previewShape = { type: 'line', x1: s.x, y1: s.y, x2: oc.x, y2: oc.y }
+  else if (toolState.active === 'rect') toolState.previewShape = { type: 'rect', x: s.x, y: s.y, w: oc.x - s.x, h: oc.y - s.y }
+  else if (toolState.active === 'circle') toolState.previewShape = { type: 'circle', x: s.x, y: s.y, r: Math.hypot(oc.x - s.x, oc.y - s.y) }
   updateDimBarCurrent(toolState.previewShape)
   redraw()
 })
@@ -1916,13 +2002,14 @@ window.addEventListener('mouseup', e => {
   const wpt = snapToGrid(raw.x, raw.y)
   const s = toolState.startW
 
+  const oc2 = orthoConstrain(s.x, s.y, wpt.x, wpt.y)
   saveState()
   if (toolState.active === 'line') {
-    engineState.shapes.push({ type: 'line', x1: s.x, y1: s.y, x2: wpt.x, y2: wpt.y })
+    engineState.shapes.push({ type: 'line', x1: s.x, y1: s.y, x2: oc2.x, y2: oc2.y })
   } else if (toolState.active === 'rect') {
-    engineState.shapes.push({ type: 'rect', x: s.x, y: s.y, w: wpt.x - s.x, h: wpt.y - s.y })
+    engineState.shapes.push({ type: 'rect', x: s.x, y: s.y, w: oc2.x - s.x, h: oc2.y - s.y })
   } else if (toolState.active === 'circle') {
-    const r = Math.hypot(wpt.x - s.x, wpt.y - s.y)
+    const r = Math.hypot(oc2.x - s.x, oc2.y - s.y)
     if (r > 0) engineState.shapes.push({ type: 'circle', x: s.x, y: s.y, r })
   }
 
@@ -1954,7 +2041,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', z:'scale', x:'mirror', a:'text', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', v:'rotate', z:'scale', x:'mirror', a:'text', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
@@ -1971,6 +2058,12 @@ window.addEventListener('keydown', e => {
     document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
     document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
   }
+  if (e.key === 'F8') {
+    e.preventDefault()
+    orthoMode = !orthoMode
+    document.getElementById('orthoBtn').textContent = `Ortho: ${orthoMode ? 'ON' : 'OFF'}`
+    document.getElementById('orthoBtn').classList.toggle('active', orthoMode)
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); doUndo() }
   if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); doRedo() }
 })
@@ -1983,6 +2076,11 @@ document.getElementById('undoBtn').addEventListener('click', doUndo)
 document.getElementById('redoBtn').addEventListener('click', doRedo)
 document.getElementById('clearBtn').addEventListener('click', () => {
   saveState(); engineState.shapes = []; engineState.selected.clear(); redraw()
+})
+document.getElementById('orthoBtn').addEventListener('click', () => {
+  orthoMode = !orthoMode
+  document.getElementById('orthoBtn').textContent = `Ortho: ${orthoMode ? 'ON' : 'OFF'}`
+  document.getElementById('orthoBtn').classList.toggle('active', orthoMode)
 })
 document.getElementById('snapBtn').addEventListener('click', () => {
   toolState.snapEnabled = !toolState.snapEnabled
