@@ -225,6 +225,7 @@ canvas {
   <div class="sep"></div>
   <button data-tool="select"   title="Select (S)">&#9654; Select</button>
   <button data-tool="move"     title="Move (M)">&#8680; Move</button>
+  <button data-tool="copy"     title="Copy (Y)">&#9107; Copy</button>
   <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
   <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
   <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
@@ -757,8 +758,9 @@ function doFillet(idx1, idx2) {
   redraw()
 }
 
-// ── Move tool ─────────────────────────────────────────────────────────────────
+// ── Move / Copy tools ─────────────────────────────────────────────────────────
 let moveState = null   // {startW:{x,y}, origShapes:Map<idx,shapeCopy>} | null
+let copyState = null   // {startW:{x,y}, origShapes:Map<idx,shapeCopy>, delta:{x,y}|null}
 
 function moveShapeFromOrig(s, orig, dx, dy) {
   if (s.type === 'line') {
@@ -1019,11 +1021,12 @@ function setTool(name) {
   filletPreview = null
   filletSel = null
   moveState = null
+  copyState = null
   const needsDist = ['offset','chamfer','fillet'].includes(name)
   document.getElementById('offsetLabel').style.display = needsDist ? '' : 'none'
   document.getElementById('offsetInput').style.display = needsDist ? '' : 'none'
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
-  canvas.style.cursor = name === 'move' ? 'move' : ''
+  canvas.style.cursor = name === 'move' ? 'move' : name === 'copy' ? 'copy' : ''
   redraw()
   updatePropsPanel()
 }
@@ -1157,6 +1160,16 @@ function redraw() {
   // Offset preview
   if (offsetPreview) drawShape(offsetPreview, '#a78bfa', 1.5, true)
 
+  // Copy preview (ghost at destination)
+  if (copyState?.delta) {
+    const { x: dx, y: dy } = copyState.delta
+    copyState.origShapes.forEach(orig => {
+      const ghost = JSON.parse(JSON.stringify(orig))
+      moveShapeFromOrig(ghost, orig, dx, dy)
+      drawShape(ghost, '#facc15', 1.5, true)
+    })
+  }
+
   // Fillet preview
   if (filletPreview) {
     drawShape(filletPreview.arc, '#fb923c', 2, true)
@@ -1280,6 +1293,23 @@ canvas.addEventListener('mousedown', e => {
     redraw(); return
   }
 
+  if (toolState.active === 'copy') {
+    let hit = -1
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      if (hitTest(engineState.shapes[i], raw.x, raw.y)) { hit=i; break }
+    }
+    if (hit < 0) { engineState.selected.clear(); copyState=null; redraw(); return }
+    if (!engineState.selected.has(hit)) {
+      engineState.selected.clear()
+      engineState.selected.add(hit)
+      updatePropsPanel()
+    }
+    const origShapes = new Map()
+    engineState.selected.forEach(idx => origShapes.set(idx, JSON.parse(JSON.stringify(engineState.shapes[idx]))))
+    copyState = { startW: { x: raw.x, y: raw.y }, origShapes, delta: null }
+    redraw(); return
+  }
+
   if (toolState.active === 'fillet') {
     let hit = -1
     for (let i=engineState.shapes.length-1; i>=0; i--) {
@@ -1395,6 +1425,12 @@ window.addEventListener('mousemove', e => {
     redraw(); return
   }
 
+  // Copy drag preview
+  if (toolState.active === 'copy' && copyState) {
+    copyState.delta = { x: wpt.x - copyState.startW.x, y: wpt.y - copyState.startW.y }
+    redraw(); return
+  }
+
   // Move drag
   if (toolState.active === 'move' && moveState) {
     const dx = wpt.x - moveState.startW.x
@@ -1500,6 +1536,19 @@ window.addEventListener('mouseup', e => {
   if (e.button === 0 && toolState.active === 'move' && moveState) {
     moveState = null; return
   }
+  if (e.button === 0 && toolState.active === 'copy' && copyState) {
+    const d = copyState.delta
+    if (d && Math.hypot(d.x, d.y) > 0.5) {
+      saveState()
+      copyState.origShapes.forEach(orig => {
+        const s = JSON.parse(JSON.stringify(orig))
+        moveShapeFromOrig(s, orig, d.x, d.y)
+        engineState.shapes.push(s)
+      })
+      redraw()
+    }
+    copyState = null; return
+  }
   if (e.button !== 0 || !toolState.drawing) return
   if (toolState.active === 'polyline' || toolState.active === 'select') return
 
@@ -1546,7 +1595,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
