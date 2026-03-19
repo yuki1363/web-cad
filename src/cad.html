@@ -73,6 +73,23 @@ button.active {
   color: #e0f2fe;
 }
 
+/* OSNAP dropdown panel */
+#osnap-wrap { position: relative; display: inline-flex; gap: 1px; }
+#osnap-panel {
+  display: none; flex-direction: column; gap: 5px;
+  position: absolute; top: calc(100% + 4px); right: 0;
+  background: rgba(15,23,42,0.98); border: 1px solid #334155;
+  border-radius: 4px; padding: 8px 10px; z-index: 100;
+  min-width: 120px; white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+#osnap-panel.visible { display: flex; }
+#osnap-panel label {
+  display: flex; align-items: center; gap: 6px;
+  cursor: pointer; color: #cbd5e1; font-size: 11px;
+}
+#osnap-panel input[type=checkbox] { accent-color: #fbbf24; }
+
 #coords {
   font-size: 11px;
   color: #64748b;
@@ -303,6 +320,16 @@ canvas {
          title="&#26684;&#23376;&#12398;&#22522;&#26412;&#12469;&#12452;&#12474;">
   <button id="snapBtn">Snap: OFF</button>
   <button id="orthoBtn">Ortho: OFF</button>
+  <div id="osnap-wrap">
+    <button id="osnapBtn" title="オブジェクトスナップ (F3)" class="active">OSNAP: ON</button>
+    <button id="osnapCfgBtn" title="スナップ種別設定">&#9660;</button>
+    <div id="osnap-panel">
+      <label><input type="checkbox" id="snap-ep"  checked> &#9633; 端点</label>
+      <label><input type="checkbox" id="snap-mid" checked> &#9651; 中点</label>
+      <label><input type="checkbox" id="snap-cen" checked> &#9675; 中心</label>
+      <label><input type="checkbox" id="snap-quad"> &#9670; 四分点</label>
+    </div>
+  </div>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
@@ -338,6 +365,11 @@ canvas {
       <button data-tool="chamfer"  title="Chamfer (F)">&#9189; Chmf</button>
       <button data-tool="fillet"   title="Fillet (I)">&#9711; Fill</button>
     </div>
+
+    <div class="tool-group-label">寸法</div>
+    <div class="tool-grid">
+      <button data-tool="dim" title="Linear Dimension (D)">&#8596; Dim</button>
+    </div>
   </div>
 
   <!-- Drawing canvas -->
@@ -369,7 +401,7 @@ canvas {
   <b>Shortcuts:</b>
   L=Line&nbsp; R=Rect&nbsp; C=Circle&nbsp; P=Polyline&nbsp; S=Select
   | Scroll=Pan&nbsp; Shift+Scroll=横Pan&nbsp; Ctrl+Scroll=Zoom&nbsp; 右クリック/Space+drag=Pan
-  | F8=Ortho切替&nbsp; F9=Snap切替&nbsp; Alt=Snap一時切替&nbsp; Del=Delete&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
+  | F3=OSNAP切替&nbsp; F8=Ortho切替&nbsp; F9=Snap切替&nbsp; Alt=Snap一時切替&nbsp; Del=Delete&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
 </div>
 
 <script>
@@ -452,7 +484,88 @@ function hitTest(s, x, y) {
       if (distToSegment(x, y, s.points[i].x, s.points[i].y, s.points[i+1].x, s.points[i+1].y) < T) return true
     }
   }
+  if (s.type === 'dimension') {
+    const ddx=s.x2-s.x1, ddy=s.y2-s.y1, dlen=Math.hypot(ddx,ddy)
+    if (dlen < 0.1) return false
+    const pxx=-ddy/dlen, pyy=ddx/dlen, off=s.offset??40
+    return distToSegment(x,y, s.x1+pxx*off,s.y1+pyy*off, s.x2+pxx*off,s.y2+pyy*off) < T
+  }
   return false
+}
+
+// ── Object Snap (OSNAP) ────────────────────────────────────────────────────────
+let osnapEnabled = true
+let activeSnapPt = null  // { x, y, snapType: 'endpoint'|'midpoint'|'center'|'quadrant' }
+const snapConfig = { endpoint: true, midpoint: true, center: true, quadrant: false }
+
+function getEndpoints(s) {
+  if (s.type==='line') return [{x:s.x1,y:s.y1},{x:s.x2,y:s.y2}]
+  if (s.type==='rect') return [{x:s.x,y:s.y},{x:s.x+s.w,y:s.y},{x:s.x+s.w,y:s.y+s.h},{x:s.x,y:s.y+s.h}]
+  if (s.type==='polyline' && s.points.length>=2) return [s.points[0], s.points[s.points.length-1]]
+  if (s.type==='arc') return [
+    {x:s.x+s.r*Math.cos(s.startAngle), y:s.y+s.r*Math.sin(s.startAngle)},
+    {x:s.x+s.r*Math.cos(s.endAngle),   y:s.y+s.r*Math.sin(s.endAngle)}
+  ]
+  if (s.type==='dimension') return [{x:s.x1,y:s.y1},{x:s.x2,y:s.y2}]
+  return []
+}
+
+function getMidpoints(s) {
+  if (s.type==='line') return [{x:(s.x1+s.x2)/2, y:(s.y1+s.y2)/2}]
+  if (s.type==='rect') return [
+    {x:s.x+s.w/2, y:s.y}, {x:s.x+s.w, y:s.y+s.h/2},
+    {x:s.x+s.w/2, y:s.y+s.h}, {x:s.x, y:s.y+s.h/2}
+  ]
+  if (s.type==='polyline') {
+    const pts = []
+    for (let i=0; i<s.points.length-1; i++)
+      pts.push({x:(s.points[i].x+s.points[i+1].x)/2, y:(s.points[i].y+s.points[i+1].y)/2})
+    return pts
+  }
+  return []
+}
+
+function findObjectSnap(x, y) {
+  if (!osnapEnabled) return null
+  const T = 16 / engineState.transform.scale
+  let best = null, bestDist = T
+  for (const s of engineState.shapes) {
+    if (snapConfig.endpoint) {
+      for (const p of getEndpoints(s)) {
+        const d = Math.hypot(x-p.x, y-p.y)
+        if (d < bestDist) { bestDist=d; best={x:p.x,y:p.y,snapType:'endpoint'} }
+      }
+    }
+    if (snapConfig.midpoint) {
+      for (const p of getMidpoints(s)) {
+        const d = Math.hypot(x-p.x, y-p.y)
+        if (d < bestDist) { bestDist=d; best={x:p.x,y:p.y,snapType:'midpoint'} }
+      }
+    }
+    if (snapConfig.center) {
+      if (s.type==='circle'||s.type==='arc') {
+        const d=Math.hypot(x-s.x,y-s.y)
+        if (d<bestDist) { bestDist=d; best={x:s.x,y:s.y,snapType:'center'} }
+      }
+    }
+    if (snapConfig.quadrant) {
+      if (s.type==='circle'||s.type==='arc') {
+        for (const a of [0, Math.PI/2, Math.PI, 3*Math.PI/2]) {
+          const qx=s.x+s.r*Math.cos(a), qy=s.y+s.r*Math.sin(a)
+          const d=Math.hypot(x-qx,y-qy)
+          if (d<bestDist) { bestDist=d; best={x:qx,y:qy,snapType:'quadrant'} }
+        }
+      }
+    }
+  }
+  return best
+}
+
+function getSnappedPoint(rawX, rawY) {
+  const obj = findObjectSnap(rawX, rawY)
+  if (obj) { activeSnapPt = obj; return obj }
+  activeSnapPt = null
+  return snapToGrid(rawX, rawY)
 }
 
 // ── Tool state ────────────────────────────────────────────────────────────────
@@ -875,6 +988,8 @@ function moveShapeFromOrig(s, orig, dx, dy) {
     s.x=orig.x+dx; s.y=orig.y+dy
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { p.x=orig.points[i].x+dx; p.y=orig.points[i].y+dy })
+  } else if (s.type === 'dimension') {
+    s.x1=orig.x1+dx; s.y1=orig.y1+dy; s.x2=orig.x2+dx; s.y2=orig.y2+dy
   }
 }
 
@@ -894,6 +1009,10 @@ function scaleShapeFromOrig(s, orig, cx, cy, f) {
     s.fontSize = Math.max(1, (orig.fontSize||16) * f)
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { p.x=sc(orig.points[i].x,cx); p.y=sc(orig.points[i].y,cy) })
+  } else if (s.type === 'dimension') {
+    s.x1=sc(orig.x1,cx); s.y1=sc(orig.y1,cy)
+    s.x2=sc(orig.x2,cx); s.y2=sc(orig.y2,cy)
+    s.offset = orig.offset * f
   }
 }
 
@@ -916,6 +1035,9 @@ function selectionCenter(idxSet) {
       minY=Math.min(minY,s.y-(s.fontSize||16)); maxY=Math.max(maxY,s.y)
     } else if (s.type==='polyline') {
       s.points.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y)})
+    } else if (s.type==='dimension') {
+      minX=Math.min(minX,s.x1,s.x2); maxX=Math.max(maxX,s.x1,s.x2)
+      minY=Math.min(minY,s.y1,s.y2); maxY=Math.max(maxY,s.y1,s.y2)
     }
   })
   return {x:(minX+maxX)/2, y:(minY+maxY)/2}
@@ -954,11 +1076,15 @@ function rotateShapeFromOrig(s, orig, cx, cy, angle) {
     const c = rp(orig.x, orig.y); s.x=c.x; s.y=c.y
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { const r=rp(orig.points[i].x,orig.points[i].y); p.x=r.x; p.y=r.y })
+  } else if (s.type === 'dimension') {
+    const a=rp(orig.x1,orig.y1), b=rp(orig.x2,orig.y2)
+    s.x1=a.x; s.y1=a.y; s.x2=b.x; s.y2=b.y
   }
 }
 
 // ── Mirror tool ───────────────────────────────────────────────────────────────
 let mirrorState = null  // {p1:{x,y}, p2:{x,y}|null, origShapes:Map<idx,shapeCopy>}
+let dimState   = null  // {phase:1,x1,y1} | {phase:2,x1,y1,x2,y2,offset}
 
 function mirrorPoint(px, py, ax, ay, bx, by) {
   const dx=bx-ax, dy=by-ay, len2=dx*dx+dy*dy
@@ -991,6 +1117,9 @@ function mirrorShapeFromOrig(s, orig, ax, ay, bx, by) {
     const c=mp(orig.x,orig.y); s.x=c.x; s.y=c.y
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { const m=mp(orig.points[i].x,orig.points[i].y); p.x=m.x; p.y=m.y })
+  } else if (s.type === 'dimension') {
+    const a=mp(orig.x1,orig.y1), b=mp(orig.x2,orig.y2)
+    s.x1=a.x; s.y1=a.y; s.x2=b.x; s.y2=b.y
   }
 }
 
@@ -1315,6 +1444,8 @@ function setTool(name) {
   scaleState = null
   mirrorState = null
   rotateState = null
+  dimState = null
+  activeSnapPt = null
   // Hide floating text input when switching tools
   document.getElementById('textInputWrap').style.display = 'none'
   textState = null
@@ -1410,7 +1541,63 @@ function drawGrid() {
 }
 
 // ── Shape drawing ─────────────────────────────────────────────────────────────
+function drawDimShape(s, color) {
+  const col = color || '#60a5fa'
+  const sc = engineState.transform.scale
+  const dx = s.x2-s.x1, dy = s.y2-s.y1
+  const len = Math.hypot(dx, dy)
+  if (len < 0.1) return
+  const nx=dx/len, ny=dy/len, px=-ny, py=nx
+  const off = s.offset ?? 40
+  const extGap = (off >= 0 ? 1 : -1) * 8 / sc
+  const d1x=s.x1+px*off, d1y=s.y1+py*off
+  const d2x=s.x2+px*off, d2y=s.y2+py*off
+
+  ctx.save()
+  ctx.strokeStyle = col; ctx.fillStyle = col
+  ctx.lineWidth = 1 / sc; ctx.setLineDash([])
+
+  // Extension lines (from measured points to slightly beyond dim line)
+  ctx.beginPath()
+  ctx.moveTo(s.x1, s.y1); ctx.lineTo(d1x + px*extGap, d1y + py*extGap)
+  ctx.moveTo(s.x2, s.y2); ctx.lineTo(d2x + px*extGap, d2y + py*extGap)
+  ctx.stroke()
+
+  // Dimension line
+  ctx.beginPath(); ctx.moveTo(d1x, d1y); ctx.lineTo(d2x, d2y); ctx.stroke()
+
+  // Arrowheads (inward, toward center)
+  const aLen=10/sc, aW=3.5/sc
+  function arrow(tx, ty, dnx, dny) {
+    const apx=-dny, apy=dnx
+    ctx.beginPath()
+    ctx.moveTo(tx, ty)
+    ctx.lineTo(tx+dnx*aLen+apx*aW, ty+dny*aLen+apy*aW)
+    ctx.lineTo(tx+dnx*aLen-apx*aW, ty+dny*aLen-apy*aW)
+    ctx.closePath(); ctx.fill()
+  }
+  arrow(d1x, d1y, nx, ny)
+  arrow(d2x, d2y, -nx, -ny)
+
+  // Text (rotated along dimension direction, slightly offset from line)
+  const mx=(d1x+d2x)/2, my=(d1y+d2y)/2
+  const fs = 11/sc
+  ctx.font = `${fs}px Consolas, monospace`
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  let angle = Math.atan2(ny, nx)
+  if (Math.cos(angle) < -0.001) angle += Math.PI  // keep text readable
+  ctx.translate(mx, my); ctx.rotate(angle)
+  const tOff = (off >= 0 ? -1 : 1) * 9/sc
+  const tw = ctx.measureText(len.toFixed(1)).width + 8/sc
+  ctx.fillStyle = 'rgba(2,6,23,0.85)'
+  ctx.fillRect(-tw/2, tOff-fs*0.8, tw, fs*1.6)
+  ctx.fillStyle = col
+  ctx.fillText(len.toFixed(1), 0, tOff)
+  ctx.restore()
+}
+
 function drawShape(s, color, width, dashed) {
+  if (s.type === 'dimension') { drawDimShape(s, color); return }
   if (s.type === 'text') {
     ctx.save()
     ctx.font = `${s.fontSize || 16}px sans-serif`
@@ -1541,6 +1728,43 @@ function redraw() {
     })
   }
 
+  // Dim tool first-point indicator
+  if (toolState.active === 'dim' && dimState?.phase >= 1) {
+    ctx.beginPath()
+    ctx.arc(dimState.x1, dimState.y1, 4/scale, 0, Math.PI*2)
+    ctx.fillStyle = '#60a5fa'; ctx.fill()
+    if (dimState.phase >= 2) {
+      ctx.beginPath(); ctx.arc(dimState.x2, dimState.y2, 4/scale, 0, Math.PI*2)
+      ctx.fill()
+    }
+  }
+
+  // OSNAP snap indicator
+  if (activeSnapPt) {
+    const sz = 9/scale
+    ctx.save()
+    ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 1.5/scale; ctx.setLineDash([])
+    const {x: sx, y: sy, snapType} = activeSnapPt
+    if (snapType === 'endpoint') {
+      ctx.strokeRect(sx-sz/2, sy-sz/2, sz, sz)
+    } else if (snapType === 'midpoint') {
+      ctx.beginPath()
+      ctx.moveTo(sx, sy-sz*0.65); ctx.lineTo(sx+sz*0.6, sy+sz*0.45); ctx.lineTo(sx-sz*0.6, sy+sz*0.45)
+      ctx.closePath(); ctx.stroke()
+    } else if (snapType === 'center') {
+      ctx.beginPath(); ctx.arc(sx, sy, sz*0.55, 0, Math.PI*2); ctx.stroke()
+      ctx.beginPath()
+      ctx.moveTo(sx-sz*0.9,sy); ctx.lineTo(sx+sz*0.9,sy)
+      ctx.moveTo(sx,sy-sz*0.9); ctx.lineTo(sx,sy+sz*0.9)
+      ctx.stroke()
+    } else if (snapType === 'quadrant') {
+      ctx.beginPath()
+      ctx.moveTo(sx,sy-sz*0.7); ctx.lineTo(sx+sz*0.7,sy); ctx.lineTo(sx,sy+sz*0.7); ctx.lineTo(sx-sz*0.7,sy)
+      ctx.closePath(); ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   ctx.setTransform(1, 0, 0, 1, 0, 0)
 }
 
@@ -1591,7 +1815,22 @@ canvas.addEventListener('mousedown', e => {
   if (e.button !== 0) return
 
   const raw = screenToWorld(e.offsetX, e.offsetY)
-  const wpt = snapToGrid(raw.x, raw.y)
+  const wpt = getSnappedPoint(raw.x, raw.y)
+
+  if (toolState.active === 'dim') {
+    if (!dimState) {
+      dimState = { phase: 1, x1: wpt.x, y1: wpt.y }
+    } else if (dimState.phase === 1) {
+      dimState = { phase: 2, x1: dimState.x1, y1: dimState.y1, x2: wpt.x, y2: wpt.y, offset: 40 }
+    } else if (dimState.phase === 2) {
+      saveState()
+      engineState.shapes.push({ type: 'dimension', x1: dimState.x1, y1: dimState.y1,
+                                 x2: dimState.x2, y2: dimState.y2, offset: dimState.offset ?? 40 })
+      dimState = null
+    }
+    toolState.previewShape = null
+    redraw(); return
+  }
 
   if (toolState.active === 'offset') {
     for (let i=engineState.shapes.length-1; i>=0; i--) {
@@ -1812,7 +2051,7 @@ window.addEventListener('mousemove', e => {
   const rect = canvas.getBoundingClientRect()
   const ox = e.clientX - rect.left, oy = e.clientY - rect.top
   const raw = screenToWorld(ox, oy)
-  const wpt = snapToGrid(raw.x, raw.y)
+  const wpt = getSnappedPoint(raw.x, raw.y)
 
   document.getElementById('coords').textContent = `X: ${wpt.x.toFixed(1)}  Y: ${(-wpt.y).toFixed(1)}`
 
@@ -1822,6 +2061,23 @@ window.addEventListener('mousemove', e => {
     for (let i=engineState.shapes.length-1; i>=0; i--) {
       const s = engineState.shapes[i]
       if (hitTest(s, raw.x, raw.y)) { offsetPreview = computeOffsetShape(s, raw.x, raw.y); break }
+    }
+    redraw(); return
+  }
+
+  // Dim tool preview
+  if (toolState.active === 'dim' && dimState) {
+    if (dimState.phase === 1) {
+      toolState.previewShape = { type: 'line', x1: dimState.x1, y1: dimState.y1, x2: wpt.x, y2: wpt.y }
+    } else if (dimState.phase === 2) {
+      const ddx=dimState.x2-dimState.x1, ddy=dimState.y2-dimState.y1, dlen=Math.hypot(ddx,ddy)
+      if (dlen > 0.1) {
+        const ppx=-ddy/dlen, ppy=ddx/dlen
+        const offset = (wpt.x-dimState.x1)*ppx + (wpt.y-dimState.y1)*ppy
+        dimState.offset = offset
+        toolState.previewShape = { type: 'dimension', x1: dimState.x1, y1: dimState.y1,
+                                   x2: dimState.x2, y2: dimState.y2, offset }
+      }
     }
     redraw(); return
   }
@@ -1995,11 +2251,11 @@ window.addEventListener('mouseup', e => {
     copyState = null; return
   }
   if (e.button !== 0 || !toolState.drawing) return
-  if (toolState.active === 'polyline' || toolState.active === 'select') return
+  if (toolState.active === 'polyline' || toolState.active === 'select' || toolState.active === 'dim') return
 
   const rect = canvas.getBoundingClientRect()
   const raw = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
-  const wpt = snapToGrid(raw.x, raw.y)
+  const wpt = getSnappedPoint(raw.x, raw.y)
   const s = toolState.startW
 
   const oc2 = orthoConstrain(s.x, s.y, wpt.x, wpt.y)
@@ -2041,7 +2297,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', v:'rotate', z:'scale', x:'mirror', a:'text', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', v:'rotate', z:'scale', x:'mirror', a:'text', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet', d:'dim' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
@@ -2064,6 +2320,13 @@ window.addEventListener('keydown', e => {
     document.getElementById('orthoBtn').textContent = `Ortho: ${orthoMode ? 'ON' : 'OFF'}`
     document.getElementById('orthoBtn').classList.toggle('active', orthoMode)
   }
+  if (e.key === 'F3') {
+    e.preventDefault()
+    osnapEnabled = !osnapEnabled
+    document.getElementById('osnapBtn').textContent = `OSNAP: ${osnapEnabled ? 'ON' : 'OFF'}`
+    document.getElementById('osnapBtn').classList.toggle('active', osnapEnabled)
+    if (!osnapEnabled) { activeSnapPt = null; redraw() }
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); doUndo() }
   if ((e.ctrlKey || e.metaKey) && e.key === 'y') { e.preventDefault(); doRedo() }
 })
@@ -2082,6 +2345,26 @@ document.getElementById('orthoBtn').addEventListener('click', () => {
   document.getElementById('orthoBtn').textContent = `Ortho: ${orthoMode ? 'ON' : 'OFF'}`
   document.getElementById('orthoBtn').classList.toggle('active', orthoMode)
 })
+
+// OSNAP toggle button (F3)
+document.getElementById('osnapBtn').addEventListener('click', () => {
+  osnapEnabled = !osnapEnabled
+  document.getElementById('osnapBtn').textContent = `OSNAP: ${osnapEnabled ? 'ON' : 'OFF'}`
+  document.getElementById('osnapBtn').classList.toggle('active', osnapEnabled)
+  if (!osnapEnabled) { activeSnapPt = null; redraw() }
+})
+// OSNAP settings panel (▼ button)
+document.getElementById('osnapCfgBtn').addEventListener('click', e => {
+  e.stopPropagation()
+  document.getElementById('osnap-panel').classList.toggle('visible')
+})
+document.addEventListener('click', () => document.getElementById('osnap-panel').classList.remove('visible'))
+document.getElementById('osnap-panel').addEventListener('click', e => e.stopPropagation())
+// Snap config checkboxes
+document.getElementById('snap-ep').addEventListener('change', e => { snapConfig.endpoint = e.target.checked })
+document.getElementById('snap-mid').addEventListener('change', e => { snapConfig.midpoint = e.target.checked })
+document.getElementById('snap-cen').addEventListener('change', e => { snapConfig.center = e.target.checked })
+document.getElementById('snap-quad').addEventListener('change', e => { snapConfig.quadrant = e.target.checked })
 document.getElementById('snapBtn').addEventListener('click', () => {
   toolState.snapEnabled = !toolState.snapEnabled
   document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
