@@ -240,7 +240,7 @@ canvas {
   <div class="sep"></div>
   <span class="grid-label">&#26684;&#23376;:</span>
   <input id="gridInput" type="number" value="50" min="1" max="10000" step="1" title="&#26684;&#23376;&#12398;&#22522;&#672C;&#12469;&#12452;&#12474;">
-  <button id="snapBtn" class="active">Snap: ON</button>
+  <button id="snapBtn">Snap: OFF</button>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
@@ -262,8 +262,8 @@ canvas {
 <div id="hint">
   <b>Shortcuts:</b>
   L=Line&nbsp; R=Rect&nbsp; C=Circle&nbsp; P=Polyline&nbsp; S=Select
-  | Scroll=Pan&nbsp; Shift+Scroll=横Pan&nbsp; Ctrl+Scroll=Zoom&nbsp; 右クリック/Space+drag=Pan&nbsp; F9=Snap
-  | Del=Delete selected&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
+  | Scroll=Pan&nbsp; Shift+Scroll=横Pan&nbsp; Ctrl+Scroll=Zoom&nbsp; 右クリック/Space+drag=Pan
+  | F9=Snap切替&nbsp; Alt=Snap一時切替&nbsp; Del=Delete&nbsp; Esc=Cancel&nbsp; Dblclick=End polyline
 </div>
 
 <script>
@@ -349,7 +349,7 @@ const toolState = {
   startW: null,
   previewShape: null,
   polyPoints: [],
-  snapEnabled: true,
+  snapEnabled: false,
 }
 
 // ── Dimension state ───────────────────────────────────────────────────────────
@@ -660,8 +660,11 @@ function drawDimAnnotation(s, color) {
   ctx.restore()
 }
 
+let altDown = false   // Alt キーで一時的にスナップを反転
+
 function snapToGrid(x, y) {
-  if (!toolState.snapEnabled) return { x, y }
+  const snap = altDown ? !toolState.snapEnabled : toolState.snapEnabled
+  if (!snap) return { x, y }
   return { x: Math.round(x / gridSpacing) * gridSpacing, y: Math.round(y / gridSpacing) * gridSpacing }
 }
 
@@ -843,8 +846,14 @@ canvas.addEventListener('contextmenu', e => e.preventDefault())
 
 // Pan
 let panning = false, panLast = null, spaceDown = false
-window.addEventListener('keydown', e => { if (e.code === 'Space') { spaceDown = true; e.preventDefault() } })
-window.addEventListener('keyup',   e => { if (e.code === 'Space') spaceDown = false })
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') { spaceDown = true; e.preventDefault() }
+  if (e.code === 'AltLeft' || e.code === 'AltRight') { altDown = true; e.preventDefault() }
+})
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space') spaceDown = false
+  if (e.code === 'AltLeft' || e.code === 'AltRight') altDown = false
+})
 
 canvas.addEventListener('mousedown', e => {
   if (e.button === 1 || e.button === 2 || spaceDown) {
