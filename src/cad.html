@@ -142,6 +142,21 @@ canvas {
 #dim-input:focus { border-color: #7dd3fc; box-shadow: 0 0 0 2px rgba(56,189,248,0.2); }
 #dim-bar-current { color: #64748b; min-width: 130px; font-size: 11px; }
 #dim-bar-hint { color: #475569; font-size: 11px; }
+
+.grid-label { color: #64748b; font-size: 12px; white-space: nowrap; }
+#gridInput {
+  background: #0f172a;
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  width: 58px;
+  border-radius: 3px;
+  outline: none;
+  text-align: right;
+}
+#gridInput:focus { border-color: #475569; }
 </style>
 </head>
 <body>
@@ -163,6 +178,9 @@ canvas {
   <button id="printBtn">&#128438; PDF&#21360;&#21029;</button>
   <div class="spacer"></div>
   <button id="dimBtn">&#128207; &#23546;&#27861;: OFF</button>
+  <div class="sep"></div>
+  <span class="grid-label">&#26684;&#23376;:</span>
+  <input id="gridInput" type="number" value="50" min="1" max="10000" step="1" title="&#26684;&#23376;&#12398;&#22522;&#672C;&#12469;&#12452;&#12474;">
   <button id="snapBtn" class="active">Snap: ON</button>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
@@ -448,12 +466,13 @@ function setTool(name) {
 
 // ── Grid ──────────────────────────────────────────────────────────────────────
 let gridSpacing = 50
+let baseGridSpacing = 50   // user-controlled base unit
 
 function drawGrid() {
   const { x: ox, y: oy, scale } = engineState.transform
   const w = canvas.width, h = canvas.height
 
-  let spacing = 50
+  let spacing = baseGridSpacing
   while (spacing * scale < 10) spacing *= 5
   while (spacing * scale > 200) spacing /= 5
   gridSpacing = spacing
@@ -734,6 +753,14 @@ document.getElementById('snapBtn').addEventListener('click', () => {
   document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
   document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
 })
+document.getElementById('gridInput').addEventListener('change', e => {
+  const v = parseFloat(e.target.value)
+  if (!isNaN(v) && v >= 1) { baseGridSpacing = v; redraw() }
+  else e.target.value = baseGridSpacing
+})
+// Prevent tool shortcuts while typing in grid input
+document.getElementById('gridInput').addEventListener('keydown', e => e.stopPropagation())
+
 document.getElementById('dimBtn').addEventListener('click', () => {
   showDims = !showDims
   document.getElementById('dimBtn').textContent = `📐 寸法: ${showDims ? 'ON' : 'OFF'}`
