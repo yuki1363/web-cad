@@ -99,6 +99,15 @@ canvas {
   pointer-events: none;
   white-space: nowrap;
 }
+
+@media print {
+  #toolbar, #hint { display: none !important; }
+  body { background: white; overflow: visible; }
+  canvas { display: none !important; }
+  #print-img { display: block !important; width: 100%; height: auto; }
+}
+
+#print-img { display: none; }
 </style>
 </head>
 <body>
@@ -117,12 +126,14 @@ canvas {
   <div class="sep"></div>
   <button id="clearBtn">&#128465; Clear</button>
   <button id="saveDXF">&#8659; DXF</button>
+  <button id="printBtn">&#128438; PDF&#21360;&#21029;</button>
   <div class="spacer"></div>
   <button id="snapBtn" class="active">Snap: ON</button>
   <div id="coords">X: 0.0  Y: 0.0</div>
 </div>
 
 <canvas id="canvas"></canvas>
+<img id="print-img" alt="WebCAD Print">
 
 <div id="hint">
   <b>Shortcuts:</b>
@@ -497,6 +508,34 @@ document.getElementById('snapBtn').addEventListener('click', () => {
   document.getElementById('snapBtn').textContent = `Snap: ${toolState.snapEnabled ? 'ON' : 'OFF'}`
   document.getElementById('snapBtn').classList.toggle('active', toolState.snapEnabled)
 })
+document.getElementById('printBtn').addEventListener('click', () => {
+  // Hide preview while capturing
+  const prev = toolState.previewShape
+  toolState.previewShape = null
+  redraw()
+  const dataUrl = canvas.toDataURL('image/png')
+  toolState.previewShape = prev
+  redraw()
+
+  // Open a new window with just the image, then print it
+  const win = window.open('', '_blank', 'width=900,height=700')
+  win.document.write(`<!DOCTYPE html><html><head>
+<meta charset="UTF-8">
+<title>WebCAD &#21360;&#21029;</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#fff}
+  img{display:block;width:100%;height:auto}
+  @page{margin:10mm}
+  @media print{img{width:100%}}
+</style>
+</head><body>
+<img src="${dataUrl}">
+<script>window.onload=function(){window.print()}<\/script>
+</body></html>`)
+  win.document.close()
+})
+
 document.getElementById('saveDXF').addEventListener('click', () => {
   let dxf = '0\nSECTION\n2\nENTITIES\n'
   engineState.shapes.forEach(s => {
