@@ -226,6 +226,7 @@ canvas {
   <button data-tool="select"   title="Select (S)">&#9654; Select</button>
   <button data-tool="move"     title="Move (M)">&#8680; Move</button>
   <button data-tool="copy"     title="Copy (Y)">&#9107; Copy</button>
+  <button data-tool="scale"    title="Scale (Z)">&#8693; Scale</button>
   <button data-tool="line"     title="Line (L)" class="active">/ Line</button>
   <button data-tool="rect"     title="Rectangle (R)">&#9635; Rect</button>
   <button data-tool="circle"   title="Circle (C)">&#9675; Circle</button>
@@ -758,9 +759,10 @@ function doFillet(idx1, idx2) {
   redraw()
 }
 
-// ── Move / Copy tools ─────────────────────────────────────────────────────────
-let moveState = null   // {startW:{x,y}, origShapes:Map<idx,shapeCopy>} | null
-let copyState = null   // {startW:{x,y}, origShapes:Map<idx,shapeCopy>, delta:{x,y}|null}
+// ── Move / Copy / Scale tools ──────────────────────────────────────────────────
+let moveState  = null  // {startW:{x,y}, origShapes:Map<idx,shapeCopy>}
+let copyState  = null  // {startW:{x,y}, origShapes:Map<idx,shapeCopy>, delta|null}
+let scaleState = null  // {base:{x,y}, startDist:number, factor:number, origShapes:Map}
 
 function moveShapeFromOrig(s, orig, dx, dy) {
   if (s.type === 'line') {
@@ -772,6 +774,43 @@ function moveShapeFromOrig(s, orig, dx, dy) {
   } else if (s.type === 'polyline') {
     s.points.forEach((p,i) => { p.x=orig.points[i].x+dx; p.y=orig.points[i].y+dy })
   }
+}
+
+function scaleShapeFromOrig(s, orig, cx, cy, f) {
+  const sc = (v, c) => c + (v - c) * f
+  if (s.type === 'line') {
+    s.x1=sc(orig.x1,cx); s.y1=sc(orig.y1,cy)
+    s.x2=sc(orig.x2,cx); s.y2=sc(orig.y2,cy)
+  } else if (s.type === 'rect') {
+    s.x=sc(orig.x,cx); s.y=sc(orig.y,cy)
+    s.w=orig.w*f; s.h=orig.h*f
+  } else if (s.type === 'circle' || s.type === 'arc') {
+    s.x=sc(orig.x,cx); s.y=sc(orig.y,cy)
+    s.r=Math.abs(orig.r*f)
+  } else if (s.type === 'polyline') {
+    s.points.forEach((p,i) => { p.x=sc(orig.points[i].x,cx); p.y=sc(orig.points[i].y,cy) })
+  }
+}
+
+// Bounding box center of a set of shape indices
+function selectionCenter(idxSet) {
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity
+  idxSet.forEach(i => {
+    const s=engineState.shapes[i]
+    if (s.type==='line') {
+      minX=Math.min(minX,s.x1,s.x2); maxX=Math.max(maxX,s.x1,s.x2)
+      minY=Math.min(minY,s.y1,s.y2); maxY=Math.max(maxY,s.y1,s.y2)
+    } else if (s.type==='rect') {
+      minX=Math.min(minX,s.x,s.x+s.w); maxX=Math.max(maxX,s.x,s.x+s.w)
+      minY=Math.min(minY,s.y,s.y+s.h); maxY=Math.max(maxY,s.y,s.y+s.h)
+    } else if (s.type==='circle'||s.type==='arc') {
+      minX=Math.min(minX,s.x-s.r); maxX=Math.max(maxX,s.x+s.r)
+      minY=Math.min(minY,s.y-s.r); maxY=Math.max(maxY,s.y+s.r)
+    } else if (s.type==='polyline') {
+      s.points.forEach(p=>{minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y)})
+    }
+  })
+  return {x:(minX+maxX)/2, y:(minY+maxY)/2}
 }
 
 // ── Properties panel ─────────────────────────────────────────────────────────
@@ -1022,11 +1061,12 @@ function setTool(name) {
   filletSel = null
   moveState = null
   copyState = null
+  scaleState = null
   const needsDist = ['offset','chamfer','fillet'].includes(name)
   document.getElementById('offsetLabel').style.display = needsDist ? '' : 'none'
   document.getElementById('offsetInput').style.display = needsDist ? '' : 'none'
   document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('active', b.dataset.tool === name))
-  canvas.style.cursor = name === 'move' ? 'move' : name === 'copy' ? 'copy' : ''
+  canvas.style.cursor = name === 'move' ? 'move' : name === 'copy' ? 'copy' : name === 'scale' ? 'nwse-resize' : ''
   redraw()
   updatePropsPanel()
 }
@@ -1160,6 +1200,15 @@ function redraw() {
   // Offset preview
   if (offsetPreview) drawShape(offsetPreview, '#a78bfa', 1.5, true)
 
+  // Scale base-point crosshair
+  if (scaleState) {
+    const { x: bx, y: by } = scaleState.base
+    const sz = 8 / engineState.transform.scale
+    ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 1.5 / engineState.transform.scale
+    ctx.beginPath(); ctx.moveTo(bx-sz,by); ctx.lineTo(bx+sz,by); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(bx,by-sz); ctx.lineTo(bx,by+sz); ctx.stroke()
+  }
+
   // Copy preview (ghost at destination)
   if (copyState?.delta) {
     const { x: dx, y: dy } = copyState.delta
@@ -1290,6 +1339,27 @@ canvas.addEventListener('mousedown', e => {
     const origShapes = new Map()
     engineState.selected.forEach(idx => origShapes.set(idx, JSON.parse(JSON.stringify(engineState.shapes[idx]))))
     moveState = { startW: { x: raw.x, y: raw.y }, origShapes }
+    redraw(); return
+  }
+
+  if (toolState.active === 'scale') {
+    let hit = -1
+    for (let i=engineState.shapes.length-1; i>=0; i--) {
+      if (hitTest(engineState.shapes[i], raw.x, raw.y)) { hit=i; break }
+    }
+    if (hit < 0) { engineState.selected.clear(); scaleState=null; redraw(); return }
+    if (!engineState.selected.has(hit)) {
+      engineState.selected.clear()
+      engineState.selected.add(hit)
+      updatePropsPanel()
+    }
+    const base = selectionCenter(engineState.selected)
+    const startDist = Math.hypot(raw.x - base.x, raw.y - base.y)
+    if (startDist < 1) { redraw(); return }
+    saveState()
+    const origShapes = new Map()
+    engineState.selected.forEach(idx => origShapes.set(idx, JSON.parse(JSON.stringify(engineState.shapes[idx]))))
+    scaleState = { base, startDist, factor: 1, origShapes }
     redraw(); return
   }
 
@@ -1425,6 +1495,18 @@ window.addEventListener('mousemove', e => {
     redraw(); return
   }
 
+  // Scale drag
+  if (toolState.active === 'scale' && scaleState) {
+    const dist = Math.hypot(raw.x - scaleState.base.x, raw.y - scaleState.base.y)
+    scaleState.factor = Math.max(0.01, dist / scaleState.startDist)
+    engineState.selected.forEach(idx => {
+      scaleShapeFromOrig(engineState.shapes[idx], scaleState.origShapes.get(idx),
+                         scaleState.base.x, scaleState.base.y, scaleState.factor)
+    })
+    updatePropsPanel()
+    redraw(); return
+  }
+
   // Copy drag preview
   if (toolState.active === 'copy' && copyState) {
     copyState.delta = { x: wpt.x - copyState.startW.x, y: wpt.y - copyState.startW.y }
@@ -1536,6 +1618,9 @@ window.addEventListener('mouseup', e => {
   if (e.button === 0 && toolState.active === 'move' && moveState) {
     moveState = null; return
   }
+  if (e.button === 0 && toolState.active === 'scale' && scaleState) {
+    scaleState = null; return
+  }
   if (e.button === 0 && toolState.active === 'copy' && copyState) {
     const d = copyState.delta
     if (d && Math.hypot(d.x, d.y) > 0.5) {
@@ -1595,7 +1680,7 @@ window.addEventListener('keydown', e => {
     return
   }
 
-  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
+  const toolMap = { l:'line', r:'rect', c:'circle', p:'polyline', s:'select', m:'move', y:'copy', z:'scale', t:'trim', e:'extend', o:'offset', f:'chamfer', i:'fillet' }
   if (toolMap[e.key] && !e.ctrlKey && !e.metaKey) { setTool(toolMap[e.key]); return }
 
   if (e.key === 'Escape') {
