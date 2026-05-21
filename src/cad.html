@@ -601,8 +601,9 @@ function showDimBar(tool) {
   document.getElementById('dim-input').value = ''
   document.getElementById('dim-bar-current').textContent = ''
   bar.classList.add('visible')
-  // Slight delay so the mousedown click doesn't immediately blur
-  setTimeout(() => document.getElementById('dim-input').focus(), 50)
+  setTimeout(() => {
+    if (bar.classList.contains('visible')) document.getElementById('dim-input').focus()
+  }, 50)
 }
 
 function hideDimBar() {
@@ -2259,14 +2260,26 @@ window.addEventListener('mouseup', e => {
   const s = toolState.startW
 
   const oc2 = orthoConstrain(s.x, s.y, wpt.x, wpt.y)
-  saveState()
+
+  let shapeAdded = false
   if (toolState.active === 'line') {
-    engineState.shapes.push({ type: 'line', x1: s.x, y1: s.y, x2: oc2.x, y2: oc2.y })
+    shapeAdded = oc2.x !== s.x || oc2.y !== s.y
   } else if (toolState.active === 'rect') {
-    engineState.shapes.push({ type: 'rect', x: s.x, y: s.y, w: oc2.x - s.x, h: oc2.y - s.y })
+    shapeAdded = oc2.x !== s.x && oc2.y !== s.y
   } else if (toolState.active === 'circle') {
-    const r = Math.hypot(oc2.x - s.x, oc2.y - s.y)
-    if (r > 0) engineState.shapes.push({ type: 'circle', x: s.x, y: s.y, r })
+    shapeAdded = Math.hypot(oc2.x - s.x, oc2.y - s.y) > 0
+  }
+
+  if (shapeAdded) {
+    saveState()
+    if (toolState.active === 'line') {
+      engineState.shapes.push({ type: 'line', x1: s.x, y1: s.y, x2: oc2.x, y2: oc2.y })
+    } else if (toolState.active === 'rect') {
+      engineState.shapes.push({ type: 'rect', x: s.x, y: s.y, w: oc2.x - s.x, h: oc2.y - s.y })
+    } else if (toolState.active === 'circle') {
+      const r = Math.hypot(oc2.x - s.x, oc2.y - s.y)
+      engineState.shapes.push({ type: 'circle', x: s.x, y: s.y, r })
+    }
   }
 
   toolState.drawing = false; toolState.previewShape = null; toolState.startW = null
