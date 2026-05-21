@@ -116,7 +116,7 @@ function drawGrid(){
 
 ctx.strokeStyle="#1e293b"
 
-for(let x=0;x<canvas.width;x+=50){
+for(let x=0;x<=canvas.width;x+=50){
 
 ctx.beginPath()
 ctx.moveTo(x,0)
@@ -125,7 +125,7 @@ ctx.stroke()
 
 }
 
-for(let y=0;y<canvas.height;y+=50){
+for(let y=0;y<=canvas.height;y+=50){
 
 ctx.beginPath()
 ctx.moveTo(0,y)
